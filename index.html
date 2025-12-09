@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>S.E.N.T.I.N.E.L.A</title>
+<script>
+  // Processa redirect do 404.html (para SPA routing no GitHub Pages)
+  (function() {
+    const redirect = sessionStorage.getItem('redirect');
+    if (redirect) {
+      sessionStorage.removeItem('redirect');
+      const base = '/Sentinela_projeto_EDEN';
+      const path = redirect.replace(base, '') || '/';
+      window.history.replaceState(null, '', base + path);
+    }
+  })();
+</script>
+  <script type="module" crossorigin src="/Sentinela_projeto_EDEN/assets/index-DHKqKNSB.js"></script>
+  <link rel="stylesheet" crossorigin href="/Sentinela_projeto_EDEN/assets/index-DMVYaNUU.css">
+</head>
+<body>
+<div id="root"></div>
+</body>
+</html>
