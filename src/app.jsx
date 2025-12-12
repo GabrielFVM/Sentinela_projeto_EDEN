@@ -2,7 +2,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Header from "./components/Header";
 import CidadePage from "./pages/CidadePage";
+import SentinelaPage from "./pages/sentinela";
 import Login from "./pages/Login";
+import { API_BASE_URL } from "./config";
 
 // Função para decodificar JWT e extrair payload
 function decodeToken(token) {
@@ -32,9 +34,22 @@ function getUsernameFromToken(token) {
   return payload?.username || 'Usuário';
 }
 
+function getCargoFromToken(token) {
+  const payload = decodeToken(token);
+  return payload?.cargo || 'membro';
+}
+
+// Função para extrair display_name do token
+function getDisplayNameFromToken(token) {
+  const payload = decodeToken(token);
+  return payload?.display_name || payload?.username || 'Usuário';
+}
+
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [cargo, setCargo] = useState('');
   const [loading, setLoading] = useState(true);
 
   // Função de logout que pode ser chamada de qualquer lugar
@@ -42,6 +57,7 @@ export default function App() {
     localStorage.removeItem('authToken');
     setIsAuthenticated(false);
     setUsername('');
+    setDisplayName('');
   }, []);
 
   // Função para validar token com o servidor
@@ -62,7 +78,7 @@ export default function App() {
 
     // Valida com o servidor fazendo uma requisição simples
     try {
-      const response = await fetch('http://127.0.0.1:2025/', {
+      const response = await fetch(`${API_BASE_URL}/`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
@@ -85,6 +101,8 @@ export default function App() {
     if (token && !isTokenExpired(token)) {
       setIsAuthenticated(true);
       setUsername(getUsernameFromToken(token));
+      setDisplayName(getDisplayNameFromToken(token));
+      setCargo(getCargoFromToken(token));
     } else if (token) {
       // Token existe mas está expirado
       localStorage.removeItem('authToken');
@@ -110,6 +128,7 @@ export default function App() {
     localStorage.setItem('authToken', token);
     setIsAuthenticated(true);
     setUsername(getUsernameFromToken(token));
+    setDisplayName(getDisplayNameFromToken(token));
   };
 
   if (loading) {
@@ -117,18 +136,33 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/Sentinela_projeto_EDEN">
       <Routes>
         {/* Rota de login */}
         <Route path="/login" element={<Login onLoginSuccess={handleLogin} />} />
 
-        {/* Rota protegida da cidade */}
+        {/* Rota principal - Central de Operações */}
         <Route
-          path="/perimetro"
+          path="/sentinela"
           element={
             isAuthenticated ? (
               <>
-                <Header onLogout={handleLogout} username={username} />
+                <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
+                <SentinelaPage />
+              </>
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Rota de perímetro específico */}
+        <Route
+          path="/perimetro/:id"
+          element={
+            isAuthenticated ? (
+              <>
+                <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
                 <CidadePage />
               </>
             ) : (
@@ -137,11 +171,11 @@ export default function App() {
           }
         />
 
-        {/* Rota raiz redireciona para login */}
-        <Route path="/" element={<Navigate to={isAuthenticated ? "/perimetro" : "/login"} replace />} />
+        {/* Rota raiz redireciona para sentinela ou login */}
+        <Route path="/" element={<Navigate to={isAuthenticated ? "/sentinela" : "/login"} replace />} />
 
         {/* Rota coringa para 404 */}
-        <Route path="*" element={<Navigate to={isAuthenticated ? "/perimetro" : "/login"} replace />} />
+        <Route path="*" element={<Navigate to={isAuthenticated ? "/sentinela" : "/login"} replace />} />
       </Routes>
     </BrowserRouter>
   );

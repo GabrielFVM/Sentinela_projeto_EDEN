@@ -43,7 +43,7 @@ export default function PerfilCard({ perfil }) {
             fontWeight: '600',
             letterSpacing: '1px'
           }}>
-            {perfil.nome}
+            {perfil.homunculo}
           </h3>
         </div>
       
@@ -62,7 +62,7 @@ export default function PerfilCard({ perfil }) {
           fontSize: '0.95rem',
           lineHeight: '1.5'
         }}>
-          {perfil.funcao}
+          {perfil.simulacro}
         </p>
       </div>
       

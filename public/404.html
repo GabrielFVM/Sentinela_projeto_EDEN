@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>S.E.N.T.I.N.E.L.A</title>
+  <script>
+    // Redireciona para o index.html preservando a rota
+    // Isso permite que o React Router lide com a rota
+    const path = window.location.pathname;
+    const search = window.location.search;
+    const hash = window.location.hash;
+    
+    // Redireciona mantendo o caminho
+    sessionStorage.setItem('redirect', path + search + hash);
+    window.location.replace('/Sentinela_projeto_EDEN/');
+  </script>
+</head>
+<body>
+  <p>Redirecionando...</p>
+</body>
+</html>

@@ -1,10 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { API_BASE_URL } from '../config';
+import EditPerfil from './editPerfil';
 
 export default function Profile({ username = 'Usuário', funcao = 'Sentinela' }) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
+  const [isHoveringContainer, setIsHoveringContainer] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [editPerfilOpen, setEditPerfilOpen] = useState(false);
+  const [userData, setUserData] = useState(null);
   const fileInputRef = useRef(null);
 
   // Estado do editor de imagem
@@ -30,12 +35,27 @@ export default function Profile({ username = 'Usuário', funcao = 'Sentinela' })
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Carregar foto do servidor ao iniciar
+  // Carregar dados do usuário e foto ao iniciar
   useEffect(() => {
     const token = localStorage.getItem('authToken');
     if (!token) return;
 
-    fetch('http://127.0.0.1:2025/users/me/foto', {
+    // Carregar dados do usuário
+    fetch(`${API_BASE_URL}/users/me`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (!data.erro) {
+          setUserData(data);
+        }
+      })
+      .catch(err => console.error('Erro ao carregar dados:', err));
+
+    // Carregar foto
+    fetch(`${API_BASE_URL}/users/me/foto`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -164,7 +184,7 @@ export default function Profile({ username = 'Usuário', funcao = 'Sentinela' })
       const formData = new FormData();
       formData.append('foto', new File([blob], 'profile.jpg', { type: 'image/jpeg' }));
 
-      const response = await fetch('http://127.0.0.1:2025/users/me/foto', {
+      const response = await fetch(`${API_BASE_URL}/users/me/foto`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -191,21 +211,25 @@ export default function Profile({ username = 'Usuário', funcao = 'Sentinela' })
 
   return (
     <>
-      <div style={{
-        position: isScrolled ? 'fixed' : 'absolute',
-        top: topPosition,
-        left: '20px',
-        zIndex: 1001,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        background: isScrolled ? 'transparent' : 'rgba(26, 26, 26, 0.95)',
-        padding: isScrolled ? '0px' : '12px',
-        borderRadius: '12px',
-        border: isScrolled ? 'none' : '2px solid #cc0000',
-        boxShadow: isScrolled ? 'none' : '0 4px 16px rgba(204, 0, 0, 0.2)',
-        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-      }}>
+      <div 
+        onMouseEnter={() => setIsHoveringContainer(true)}
+        onMouseLeave={() => setIsHoveringContainer(false)}
+        style={{
+          position: isScrolled ? 'fixed' : 'absolute',
+          top: topPosition,
+          left: '20px',
+          zIndex: 1001,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          background: isScrolled ? 'transparent' : 'rgba(26, 26, 26, 0.95)',
+          padding: isScrolled ? '0px' : '12px',
+          paddingRight: isHoveringContainer ? (isScrolled ? '45px' : '55px') : (isScrolled ? '0px' : '12px'),
+          borderRadius: '12px',
+          border: isScrolled ? 'none' : '2px solid #cc0000',
+          boxShadow: isScrolled ? 'none' : '0 4px 16px rgba(204, 0, 0, 0.2)',
+          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+        }}>
         {/* Avatar com funcionalidade de upload */}
         <div 
           style={{
@@ -304,21 +328,67 @@ export default function Profile({ username = 'Usuário', funcao = 'Sentinela' })
             textTransform: 'uppercase',
             letterSpacing: '0.5px'
           }}>
-            {username}
+            {userData?.display_name || username}
           </p>
           {!isScrolled && (
-            <p style={{
-              margin: 0,
-              color: '#999999',
-              fontSize: '0.75rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.3px',
-              transition: 'opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-            }}>
-              {funcao}
-            </p>
+            <>
+              <p style={{
+                margin: 0,
+                color: '#999999',
+                fontSize: '0.75rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.3px',
+                transition: 'opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+              }}>
+                {userData?.cargo || funcao}
+              </p>
+              {userData?.grupo && (
+                <p style={{
+                  margin: 0,
+                  color: userData.grupo === 'Serafim' ? '#ffcc00' : '#666666',
+                  fontSize: '0.65rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.3px',
+                  fontWeight: userData.grupo === 'Serafim' ? '600' : '400',
+                  textShadow: userData.grupo === 'Serafim' ? '0 0 8px rgba(255, 204, 0, 0.5)' : 'none'
+                }}>
+                  {userData.grupo}
+                </p>
+              )}
+            </>
           )}
         </div>
+
+        {/* Botão de Editar Perfil - Aparece no hover */}
+        <button
+          onClick={() => setEditPerfilOpen(true)}
+          style={{
+            position: 'absolute',
+            right: isScrolled ? '0px' : '10px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: '30px',
+            height: '30px',
+            borderRadius: '50%',
+            background: 'rgba(204, 0, 0, 0.9)',
+            border: '2px solid #ff3333',
+            color: '#ffffff',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: isHoveringContainer ? 1 : 0,
+            pointerEvents: isHoveringContainer ? 'auto' : 'none',
+            transition: 'all 0.3s ease',
+            boxShadow: '0 2px 10px rgba(204, 0, 0, 0.5)'
+          }}
+          title="Editar Perfil"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
       </div>
 
       {/* Modal Editor de Imagem */}
@@ -507,6 +577,14 @@ export default function Profile({ username = 'Usuário', funcao = 'Sentinela' })
           </div>
         </>
       )}
+
+      {/* Modal de Edição de Perfil */}
+      <EditPerfil 
+        isOpen={editPerfilOpen}
+        onClose={() => setEditPerfilOpen(false)}
+        userData={userData || { username, cargo: funcao }}
+        onUpdate={(newData) => setUserData(prev => ({ ...prev, ...newData }))}
+      />
 
       {/* CSS */}
       <style>{`

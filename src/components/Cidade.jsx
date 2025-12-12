@@ -1,7 +1,5 @@
 import React from 'react';
 import PerfilCard from './PerfilCard';
-import AimeCard from './AimeCard';
-
 // Cidade Component
 export default function Cidade({ cidade }) {
   if (!cidade) {
@@ -30,7 +28,7 @@ export default function Cidade({ cidade }) {
           letterSpacing: '2px',
           textTransform: 'uppercase'
         }}>
-          {cidade.cidade}
+          {cidade?.cidade || "Perimetro desconhecido"}
         </h2>
         <div style={{
           display: 'grid',
@@ -40,7 +38,7 @@ export default function Cidade({ cidade }) {
         }}>
           <div style={{ borderLeft: '3px solid #cc0000', paddingLeft: '15px' }}>
             <strong style={{ color: '#ff6666', textTransform: 'uppercase', letterSpacing: '1px' }}>População:</strong>
-            <p style={{ margin: '8px 0 0 0', color: '#cccccc', fontSize: '1.1rem' }}>{cidade.populacao}</p>
+            <p style={{ margin: '8px 0 0 0', color: '#cccccc', fontSize: '1.1rem' }}>{cidade.populacao == -1 ? "Desconhecida" : cidade.populacao}</p>
           </div>
           <div style={{ borderLeft: '3px solid #cc0000', paddingLeft: '15px' }}>
             <strong style={{ color: '#ff6666', textTransform: 'uppercase', letterSpacing: '1px' }}>Status:</strong>
@@ -48,11 +46,11 @@ export default function Cidade({ cidade }) {
           </div>
           <div style={{ borderLeft: '3px solid #cc0000', paddingLeft: '15px' }}>
             <strong style={{ color: '#ff6666', textTransform: 'uppercase', letterSpacing: '1px' }}>Classe:</strong>
-            <p style={{ margin: '8px 0 0 0', color: '#cccccc', fontSize: '1.1rem' }}>{cidade.classe}</p>
+            <p style={{ margin: '8px 0 0 0', color: '#cccccc', fontSize: '1.1rem' }}>{cidade.class}</p>
           </div>
           <div style={{ borderLeft: '3px solid #cc0000', paddingLeft: '15px' }}>
             <strong style={{ color: '#ff6666', textTransform: 'uppercase', letterSpacing: '1px' }}>Admin:</strong>
-            <p style={{ margin: '8px 0 0 0', color: '#cccccc', fontSize: '1.1rem' }}>{cidade.admin}</p>
+            <p style={{ margin: '8px 0 0 0', color: '#cccccc', fontSize: '1.1rem' }}>{cidade.admin_nome}</p>
           </div>
         </div>
       </div>
@@ -65,7 +63,7 @@ export default function Cidade({ cidade }) {
         textTransform: 'uppercase',
         letterSpacing: '2px'
       }}>
-        ◆ Homúnculos Registrados ({cidade.perfis?.length || 0})
+        ◆ Homúnculos Registrados ({cidade.homunculos?.length || 0})
       </h2>
       
       <div style={{
@@ -74,12 +72,8 @@ export default function Cidade({ cidade }) {
         gap: '25px',
         padding: '0 20px'
       }}>
-        {cidade.perfis && cidade.perfis.map((perfil) => (
-          perfil.funcao === 'Aimê' ? (
-            <AimeCard key={perfil.id} perfil={perfil} />
-          ) : (
+        {cidade.homunculos && cidade.homunculos.map((perfil) => (
             <PerfilCard key={perfil.id} perfil={perfil} />
-          )
         ))}
       </div>
     </>

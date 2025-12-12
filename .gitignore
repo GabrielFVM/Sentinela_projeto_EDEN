@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+.cache/
+dist/
+.env
+
+# Python
+*.pyc
+__pycache__/
+venv/
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Deploy/gh-pages
+*.gh-pages/

@@ -1,0 +1,4 @@
+Flask==3.1.2
+PyJWT==2.10.1
+playwright==1.56.0
+gunicorn==21.2.0

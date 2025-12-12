@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { API_BASE_URL } from '../config';
 
 export default function DetalhesNomeado({ nomeado, isOpen, onClose }) {
   const [isReady, setIsReady] = useState(false);
@@ -6,7 +7,7 @@ export default function DetalhesNomeado({ nomeado, isOpen, onClose }) {
   const [scrapeLoading, setScrapeLoading] = useState(false);
   const [scrapeError, setScrapeError] = useState(null);
   const hasAnimated = useRef(false);
-
+  console.log('nomeado recebido: ', nomeado)
   useEffect(() => {
     if (isOpen && !hasAnimated.current) {
       document.body.style.overflow = 'hidden';
@@ -42,7 +43,7 @@ export default function DetalhesNomeado({ nomeado, isOpen, onClose }) {
         return;
       }
       
-      fetch(`http://127.0.0.1:2025/scrape/${nomeado.id}`, {
+      fetch(`${API_BASE_URL}/scrape/${nomeado.id}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -324,7 +325,7 @@ export default function DetalhesNomeado({ nomeado, isOpen, onClose }) {
                 fontFamily: 'monospace'
               }}
             >
-              {nomeado.nome}
+              {nomeado.homunculo}
             </h2>
             <p
               style={{
@@ -334,7 +335,7 @@ export default function DetalhesNomeado({ nomeado, isOpen, onClose }) {
                 fontFamily: 'monospace'
               }}
             >
-              Simulacro: {nomeado.funcao}
+              Simulacro: {nomeado.simulacro}
             </p>
           </div>
 
