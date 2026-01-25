@@ -61,6 +61,10 @@ export default function EditPerfil({ isOpen, onClose, userData, onUpdate }) {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
+  // Controle para habilitar a opção de pular a animação após 2s
+  const [skipEnabled, setSkipEnabled] = useState(false);
+  const skipTimeoutRef = useRef(null);
+
   // Função para iniciar animação de fechamento
   const handleClose = () => {
     if (isClosing) return;
@@ -68,6 +72,22 @@ export default function EditPerfil({ isOpen, onClose, userData, onUpdate }) {
     setShowContent(false);
     setCloseTextIndex(0);
     setCloseDisplayedText('');
+  };
+
+  // Função para pular a animação hacker (duplo clique)
+  const handleSkipAnimation = () => {
+    if (isClosing) return;
+    // Marcar que já animou nesta sessão para não repetir
+    setHasAnimated(true);
+    // Forçar fase pronta e mostrar conteúdo imediatamente
+    setHackerPhase(1);
+    setShowContent(true);
+    // Ajustes visuais para indicar progresso concluído
+    setCurrentHackerText(hackerTexts.length);
+    setDisplayedText('');
+    setGlitchActive(false);
+    // Limpar matrix mais rápido (opcional)
+    setMatrixRain([]);
   };
 
   // Animação de fechamento
@@ -247,6 +267,33 @@ export default function EditPerfil({ isOpen, onClose, userData, onUpdate }) {
 
     return () => { document.body.style.overflow = 'unset'; };
   }, [isOpen, userData]);
+
+  // Habilitar a função de pular a animação após 2 segundos da abertura
+  useEffect(() => {
+    // limpar qualquer timeout anterior
+    if (skipTimeoutRef.current) {
+      clearTimeout(skipTimeoutRef.current);
+      skipTimeoutRef.current = null;
+    }
+
+    if (isOpen) {
+      setSkipEnabled(false);
+      // só habilita o pulo depois de 2s
+      skipTimeoutRef.current = setTimeout(() => {
+        setSkipEnabled(true);
+        skipTimeoutRef.current = null;
+      }, 2000);
+    } else {
+      setSkipEnabled(false);
+    }
+
+    return () => {
+      if (skipTimeoutRef.current) {
+        clearTimeout(skipTimeoutRef.current);
+        skipTimeoutRef.current = null;
+      }
+    };
+  }, [isOpen]);
 
   const loadCurrentPhoto = async () => {
     const token = localStorage.getItem('authToken');
@@ -574,6 +621,7 @@ export default function EditPerfil({ isOpen, onClose, userData, onUpdate }) {
       {/* Overlay */}
       <div
         onClick={hackerPhase === 1 && !isClosing ? handleClose : undefined}
+        onDoubleClick={hackerPhase === 0 && !isClosing && skipEnabled ? handleSkipAnimation : undefined}
         style={{
           position: 'fixed',
           top: 0,

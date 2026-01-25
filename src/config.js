@@ -4,7 +4,7 @@
 // Em produção: https://sentinela-backend.fly.dev
 
 // Usando Tailscale para compartilhamento
-export const API_BASE_URL = 'http://100.92.202.79:2025';
+export const API_BASE_URL = 'http://10.1.240.238:2025';
 
 export default {
   API_BASE_URL

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Header from "./components/Header";
 import CidadePage from "./pages/CidadePage";
 import SentinelaPage from "./pages/sentinela";
+import MissoesPage from "./pages/Missoes";
 import Login from "./pages/Login";
 import { API_BASE_URL } from "./config";
 
@@ -164,6 +165,36 @@ export default function App() {
               <>
                 <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
                 <CidadePage />
+              </>
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Rota de missões */}
+        <Route
+          path="/missoes"
+          element={
+            isAuthenticated ? (
+              <>
+                <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
+                <MissoesPage />
+              </>
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Rota de missão específica */}
+        <Route
+          path="/missao/:id"
+          element={
+            isAuthenticated ? (
+              <>
+                <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
+                <MissoesPage />
               </>
             ) : (
               <Navigate to="/login" replace />

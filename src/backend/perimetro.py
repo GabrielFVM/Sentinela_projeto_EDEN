@@ -78,6 +78,30 @@ def get_db():
     return db
 
 
+def get_auth_user():
+    """Retorna o usuário autenticado (dict com id, cargo, grupo) ou None."""
+    auth = request.headers.get('Authorization')
+    if not auth:
+        return None
+    parts = auth.split()
+    if len(parts) != 2 or parts[0].lower() != 'bearer':
+        return None
+    try:
+        payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+        user_id = payload.get('user_id')
+        if not user_id:
+            return None
+        db = get_db()
+        cur = db.cursor()
+        cur.execute('SELECT id, cargo, grupo FROM users WHERE id = ?', (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return { 'id': row['id'], 'cargo': row['cargo'], 'grupo': row['grupo'] }
+    except Exception:
+        return None
+
+
 def init_db():
     db = sqlite3.connect(str(DATABASE))
     cur = db.cursor()
@@ -106,7 +130,32 @@ def init_db():
             ativo INTEGER DEFAULT 1 NOT NULL,
             cargo TEXT,
             grupo TEXT DEFAULT 'Observador',
-            foto BLOB
+            foto BLOB,
+            -- Campos de ficha RPG
+            origem TEXT,
+            jogador TEXT,
+            classe TEXT,
+            nex INTEGER DEFAULT 5,
+            pe_turno INTEGER DEFAULT 1,
+            deslocamento TEXT DEFAULT '9m / 6q',
+            vida_atual INTEGER DEFAULT 0,
+            vida_max INTEGER DEFAULT 0,
+            sanidade_atual INTEGER DEFAULT 0,
+            sanidade_max INTEGER DEFAULT 0,
+            esforco_atual INTEGER DEFAULT 0,
+            esforco_max INTEGER DEFAULT 0,
+            defesa INTEGER DEFAULT 10,
+            bloqueio INTEGER DEFAULT 0,
+            esquiva INTEGER DEFAULT 0,
+            protecao TEXT,
+            resistencias TEXT,
+            proficiencias TEXT,
+            agi INTEGER DEFAULT 0,
+            forca INTEGER DEFAULT 0,
+            inteligencia INTEGER DEFAULT 0,
+            pre INTEGER DEFAULT 0,
+            vig INTEGER DEFAULT 0,
+            dt_rituais INTEGER DEFAULT 0
         )
     ''')
     cur.execute('''
@@ -126,7 +175,97 @@ def init_db():
             populacao INTEGER,
             descricao TEXT,
             admin_id INTEGER,
-            FOREIGN KEY (admin_id) REFERENCES users(id)
+            missao_id INTEGER,
+            FOREIGN KEY (admin_id) REFERENCES users(id),
+            FOREIGN KEY (missao_id) REFERENCES missoes(id) ON DELETE SET NULL
+        )
+    ''')
+    
+    # Tabela de missões
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS missoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            briefing TEXT,
+            nex INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'Não Iniciada' NOT NULL,
+            data_criacao TEXT,
+            data_conclusao TEXT,
+            criado_por INTEGER,
+            comandante_id INTEGER NOT NULL,
+            FOREIGN KEY (criado_por) REFERENCES users(id),
+            FOREIGN KEY (comandante_id) REFERENCES users(id)
+        )
+    ''')
+    
+    # Tabela de associação entre missões e agentes (users)
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS missao_agentes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            missao_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            data_atribuicao TEXT,
+            FOREIGN KEY (missao_id) REFERENCES missoes(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(missao_id, user_id)
+        )
+    ''')
+    
+    # Tabela de notificações
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS notificacoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            user_id INTEGER NOT NULL,
+            tipo TEXT NOT NULL,
+            titulo TEXT NOT NULL,
+            mensagem TEXT,
+            missao_id INTEGER,
+            remetente_id INTEGER,
+            lida INTEGER DEFAULT 0,
+            data_criacao TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (missao_id) REFERENCES missoes(id) ON DELETE SET NULL,
+            FOREIGN KEY (remetente_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+    ''')
+    
+    # Tabela de criaturas (Bestiário)
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS criaturas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            nome TEXT NOT NULL,
+            elemento TEXT,
+            elementos_adicionais TEXT,
+            deslocamento_metros TEXT,
+            deslocamento_quadrados TEXT,
+            escalada_metros TEXT,
+            escalada_quadrados TEXT,
+            voo_metros TEXT,
+            voo_quadrados TEXT,
+            agi INTEGER DEFAULT 0,
+            forca INTEGER DEFAULT 0,
+            int INTEGER DEFAULT 0,
+            pre INTEGER DEFAULT 0,
+            vig INTEGER DEFAULT 0,
+            descricao TEXT,
+            imagem BLOB,
+            criado_por INTEGER,
+            data_criacao TEXT,
+            FOREIGN KEY (criado_por) REFERENCES users(id)
+        )
+    ''')
+    
+    # Tabela de associação N:N entre criaturas e elementos
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS criatura_elementos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            criatura_id INTEGER NOT NULL,
+            elemento_id INTEGER NOT NULL,
+            is_principal INTEGER DEFAULT 0,
+            FOREIGN KEY (criatura_id) REFERENCES criaturas(id) ON DELETE CASCADE,
+            FOREIGN KEY (elemento_id) REFERENCES elementos(id) ON DELETE CASCADE,
+            UNIQUE(criatura_id, elemento_id)
         )
     ''')
     db.commit()
@@ -136,6 +275,16 @@ def init_db():
     existing_cols = [row[1] for row in cur.fetchall()]
     if 'afinidade' not in existing_cols:
         cur.execute("ALTER TABLE nomeados ADD COLUMN afinidade TEXT")
+        db.commit()
+    
+    # Ensure 'elemento' column exists in criaturas for older DBs
+    cur.execute("PRAGMA table_info(criaturas)")
+    criaturas_cols = [row[1] for row in cur.fetchall()]
+    if 'elemento' not in criaturas_cols:
+        cur.execute("ALTER TABLE criaturas ADD COLUMN elemento TEXT")
+        db.commit()
+    if 'elementos_adicionais' not in criaturas_cols:
+        cur.execute("ALTER TABLE criaturas ADD COLUMN elementos_adicionais TEXT")
         db.commit()
     
     # Ensure 'grupo' column exists in users table for older DBs
@@ -150,9 +299,74 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
         db.commit()
     
+    # Ensure RPG ficha fields exist in users table
+    ficha_fields = [
+        ('origem', 'TEXT'),
+        ('jogador', 'TEXT'),
+        ('classe', 'TEXT'),
+        ('nex', 'INTEGER DEFAULT 5'),
+        ('pe_turno', 'INTEGER DEFAULT 1'),
+        ('deslocamento', "TEXT DEFAULT '9m / 6q'"),
+        ('vida_atual', 'INTEGER DEFAULT 0'),
+        ('vida_max', 'INTEGER DEFAULT 0'),
+        ('sanidade_atual', 'INTEGER DEFAULT 0'),
+        ('sanidade_max', 'INTEGER DEFAULT 0'),
+        ('esforco_atual', 'INTEGER DEFAULT 0'),
+        ('esforco_max', 'INTEGER DEFAULT 0'),
+        ('defesa', 'INTEGER DEFAULT 10'),
+        ('bloqueio', 'INTEGER DEFAULT 0'),
+        ('esquiva', 'INTEGER DEFAULT 0'),
+        ('protecao', 'TEXT'),
+        ('resistencias', 'TEXT'),
+        ('proficiencias', 'TEXT'),
+        ('agi', 'INTEGER DEFAULT 0'),
+        ('forca', 'INTEGER DEFAULT 0'),
+        ('inteligencia', 'INTEGER DEFAULT 0'),
+        ('pre', 'INTEGER DEFAULT 0'),
+        ('vig', 'INTEGER DEFAULT 0'),
+        ('dt_rituais', 'INTEGER DEFAULT 0'),
+    ]
+    for field_name, field_type in ficha_fields:
+        if field_name not in user_cols:
+            cur.execute(f"ALTER TABLE users ADD COLUMN {field_name} {field_type}")
+            db.commit()
+
+    # Drop deprecated 'personagem' column if present (SQLite >= 3.35)
+    if 'personagem' in user_cols:
+        try:
+            cur.execute("ALTER TABLE users DROP COLUMN personagem")
+            db.commit()
+        except Exception:
+            # If running on older SQLite without DROP COLUMN support, ignore safely
+            pass
+    
+    # Ensure 'briefing' and 'nex' columns exist in missoes table for older DBs
+    cur.execute("PRAGMA table_info(missoes)")
+    missoes_cols = [row[1] for row in cur.fetchall()]
+    if 'briefing' not in missoes_cols:
+        cur.execute("ALTER TABLE missoes ADD COLUMN briefing TEXT")
+        db.commit()
+    if 'nex' not in missoes_cols:
+        cur.execute("ALTER TABLE missoes ADD COLUMN nex INTEGER DEFAULT 0")
+        db.commit()
+    
+    # Ensure 'missao_id' column exists in perimetros table for 1:1 relation
+    cur.execute("PRAGMA table_info(perimetros)")
+    perimetros_cols = [row[1] for row in cur.fetchall()]
+    if 'missao_id' not in perimetros_cols:
+        cur.execute("ALTER TABLE perimetros ADD COLUMN missao_id INTEGER")
+        db.commit()
+    
     # Ensure 'current_jti' column exists in users table for token invalidation
     if 'current_jti' not in user_cols:
         cur.execute("ALTER TABLE users ADD COLUMN current_jti TEXT")
+        db.commit()
+    
+    # Ensure 'comandante_id' column exists in missoes table for older DBs
+    cur.execute("PRAGMA table_info(missoes)")
+    missoes_cols = [row[1] for row in cur.fetchall()]
+    if 'comandante_id' not in missoes_cols:
+        cur.execute("ALTER TABLE missoes ADD COLUMN comandante_id INTEGER")
         db.commit()
     
     # Set display_name = username for any users where display_name is NULL
@@ -199,17 +413,62 @@ def init_db():
         cur.executemany('INSERT INTO users(username, display_name, password, ativo, cargo, grupo) VALUES (?,?,?,?,?,?)', adminsDef)
         db.commit()
     
-    # Populate elementos (5 fixed rows)
+    # Populate elementos (5 fixed rows) with images from public folder
     cur.execute('SELECT COUNT(1) as cnt FROM elementos')
     if cur.fetchone()[0] == 0:
-        elementosDef = [
-            (1, "Sangue", None),
-            (2, "Morte", None),
-            (3, "Energia", None),
-            (4, "Conhecimento", None),
-            (5, "Medo", None),
-        ]
-        cur.executemany('INSERT INTO elementos(id, elemento, imagem) VALUES (?,?,?)', elementosDef)
+        # Load images from public folder
+        public_folder = Path(__file__).parent.parent.parent / 'public'
+        elementos_data = []
+        for elem_id, elem_nome in [(1, "Sangue"), (2, "Morte"), (3, "Energia"), (4, "Conhecimento"), (5, "Medo")]:
+            img_path = public_folder / f"{elem_nome}.png"
+            img_data = None
+            if img_path.exists():
+                with open(img_path, 'rb') as f:
+                    img_data = f.read()
+            elementos_data.append((elem_id, elem_nome, img_data))
+        cur.executemany('INSERT INTO elementos(id, elemento, imagem) VALUES (?,?,?)', elementos_data)
+        db.commit()
+    else:
+        # Update existing elementos with images if they don't have one
+        public_folder = Path(__file__).parent.parent.parent / 'public'
+        for elem_id, elem_nome in [(1, "Sangue"), (2, "Morte"), (3, "Energia"), (4, "Conhecimento"), (5, "Medo")]:
+            cur.execute('SELECT imagem FROM elementos WHERE id = ?', (elem_id,))
+            row = cur.fetchone()
+            if row and row[0] is None:
+                img_path = public_folder / f"{elem_nome}.png"
+                if img_path.exists():
+                    with open(img_path, 'rb') as f:
+                        img_data = f.read()
+                    cur.execute('UPDATE elementos SET imagem = ? WHERE id = ?', (img_data, elem_id))
+                    db.commit()
+    
+    # Migrate existing criatura elementos from text fields to N:N table
+    cur.execute('SELECT id, elemento, elementos_adicionais FROM criaturas')
+    criaturas_to_migrate = cur.fetchall()
+    elem_name_to_id = {"Sangue": 1, "Morte": 2, "Energia": 3, "Conhecimento": 4, "Medo": 5}
+    for criatura in criaturas_to_migrate:
+        cid, elem_principal, elems_adicionais = criatura
+        # Check if already migrated
+        cur.execute('SELECT COUNT(1) FROM criatura_elementos WHERE criatura_id = ?', (cid,))
+        if cur.fetchone()[0] > 0:
+            continue  # Already migrated
+        # Add principal element
+        if elem_principal and elem_principal in elem_name_to_id:
+            try:
+                cur.execute('INSERT INTO criatura_elementos(criatura_id, elemento_id, is_principal) VALUES (?, ?, 1)',
+                           (cid, elem_name_to_id[elem_principal]))
+            except:
+                pass
+        # Add additional elements
+        if elems_adicionais:
+            for elem_nome in elems_adicionais.split(','):
+                elem_nome = elem_nome.strip()
+                if elem_nome and elem_nome in elem_name_to_id:
+                    try:
+                        cur.execute('INSERT INTO criatura_elementos(criatura_id, elemento_id, is_principal) VALUES (?, ?, 0)',
+                                   (cid, elem_name_to_id[elem_nome]))
+                    except:
+                        pass
         db.commit()
     
     # Populate perimetros (default: Véu da Serra)
@@ -573,7 +832,7 @@ def listar_elementos():
     for r in rows:
         elementos.append({
             'id': r['id'],
-            'elemento': r['elemento'],
+            'nome': r['elemento'],
             'imagem': base64.b64encode(r['imagem']).decode('utf-8') if r['imagem'] else None
         })
     return jsonify(elementos)
@@ -590,7 +849,7 @@ def obter_elemento(eid):
         return jsonify({'erro': 'Elemento não encontrado'}), 404
     return jsonify({
         'id': row['id'],
-        'elemento': row['elemento'],
+        'nome': row['elemento'],
         'imagem': base64.b64encode(row['imagem']).decode('utf-8') if row['imagem'] else None
     })
 
@@ -1059,9 +1318,12 @@ def list_perimetros():
     db = get_db()
     cur = db.cursor()
     cur.execute('''
-        SELECT p.id, p.nome, p.cidade, p.class, p.status, p.populacao, p.descricao, p.admin_id, u.display_name as admin_nome
+        SELECT p.id, p.nome, p.cidade, p.class, p.status, p.populacao, p.descricao, p.admin_id, p.missao_id,
+               u.display_name as admin_nome,
+               m.nome as missao_nome, m.status as missao_status
         FROM perimetros p
         LEFT JOIN users u ON p.admin_id = u.id
+        LEFT JOIN missoes m ON p.missao_id = m.id
     ''')
     rows = cur.fetchall()
     
@@ -1089,6 +1351,9 @@ def list_perimetros():
             'populacao': row['populacao'],
             'admin_id': row['admin_id'],
             'admin_nome': row['admin_nome'],
+            'missao_id': row['missao_id'],
+            'missao_nome': row['missao_nome'],
+            'missao_status': row['missao_status'],
             'homunculos_count': count,
             'homunculos': nomeados
         })
@@ -1102,9 +1367,12 @@ def get_perimetro(pid):
     db = get_db()
     cur = db.cursor()
     cur.execute('''
-        SELECT p.id, p.nome, p.cidade, p.class, p.status, p.populacao, p.descricao,  p.admin_id, u.display_name as admin_nome
+        SELECT p.id, p.nome, p.cidade, p.class, p.status, p.populacao, p.descricao, p.admin_id, p.missao_id,
+               u.display_name as admin_nome,
+               m.nome as missao_nome, m.status as missao_status
         FROM perimetros p
         LEFT JOIN users u ON p.admin_id = u.id
+        LEFT JOIN missoes m ON p.missao_id = m.id
         WHERE p.id = ?
     ''', (pid,))
     row = cur.fetchone()
@@ -1135,6 +1403,9 @@ def get_perimetro(pid):
         'populacao': row['populacao'],
         'admin_id': row['admin_id'],
         'admin_nome': row['admin_nome'],
+        'missao_id': row['missao_id'],
+        'missao_nome': row['missao_nome'],
+        'missao_status': row['missao_status'],
         'homunculos_count': count,
         'homunculos': nomeados
     }), 200
@@ -1198,6 +1469,10 @@ def update_perimetro(pid):
     if 'populacao' in data:
         updates.append('populacao = ?')
         values.append(data['populacao'])
+    if 'missao_id' in data:
+        updates.append('missao_id = ?')
+        # Permitir null para desvincular missão
+        values.append(data['missao_id'] if data['missao_id'] else None)
     if not updates:
         return jsonify({'erro': 'Nenhum campo para atualizar'}), 400
     
@@ -1206,7 +1481,7 @@ def update_perimetro(pid):
     cur.execute(query, values)
     db.commit()
     
-    cur.execute('SELECT id, nome, cidade, class, status, populacao, descricao, admin_id FROM perimetros WHERE id = ?', (pid,))
+    cur.execute('SELECT id, nome, cidade, class, status, populacao, descricao, admin_id, missao_id FROM perimetros WHERE id = ?', (pid,))
     row = cur.fetchone()
     return jsonify(dict(row)), 200
 
@@ -1241,6 +1516,1114 @@ def get_nomeados_perimetro(pid):
     rows = cur.fetchall()
     
     return jsonify([dict(row) for row in rows]), 200
+
+
+# ===================== ROTAS DE MISSÕES =====================
+
+@app.route('/missoes', methods=['GET'])
+def list_missoes():
+    """Lista todas as missões com seus agentes"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        SELECT m.id, m.nome, m.descricao, m.briefing, m.nex, m.status, m.data_criacao, m.data_conclusao, m.criado_por,
+               m.comandante_id, u.display_name as criador_nome, c.display_name as comandante_nome
+        FROM missoes m
+        LEFT JOIN users u ON m.criado_por = u.id
+        LEFT JOIN users c ON m.comandante_id = c.id
+        ORDER BY m.id DESC
+    ''')
+    missoes = []
+    for row in cur.fetchall():
+        missao = dict(row)
+        # Buscar foto do comandante
+        if missao.get('comandante_id'):
+            cur2 = db.cursor()
+            cur2.execute('SELECT foto FROM users WHERE id = ?', (missao['comandante_id'],))
+            cmd_foto = cur2.fetchone()
+            if cmd_foto and cmd_foto['foto']:
+                missao['comandante_foto'] = base64.b64encode(cmd_foto['foto']).decode('utf-8')
+            else:
+                missao['comandante_foto'] = None
+        else:
+            missao['comandante_foto'] = None
+        # Buscar agentes desta missão
+        cur.execute('''
+            SELECT u.id, u.username, u.display_name, u.cargo, u.grupo, ma.data_atribuicao
+            FROM missao_agentes ma
+            JOIN users u ON ma.user_id = u.id
+            WHERE ma.missao_id = ?
+        ''', (row['id'],))
+        agentes = []
+        for agente_row in cur.fetchall():
+            agente = dict(agente_row)
+            # Buscar foto do agente
+            cur2 = db.cursor()
+            cur2.execute('SELECT foto FROM users WHERE id = ?', (agente['id'],))
+            foto_row = cur2.fetchone()
+            if foto_row and foto_row['foto']:
+                agente['foto'] = base64.b64encode(foto_row['foto']).decode('utf-8')
+            else:
+                agente['foto'] = None
+            agentes.append(agente)
+        missao['agentes'] = agentes
+        missao['agentes_count'] = len(agentes)
+        
+        # Buscar perímetro vinculado a esta missão
+        cur2 = db.cursor()
+        cur2.execute('''
+            SELECT p.id, p.nome, p.cidade, p.class, p.status, p.populacao, p.descricao
+            FROM perimetros p
+            WHERE p.missao_id = ?
+        ''', (row['id'],))
+        perimetro_row = cur2.fetchone()
+        if perimetro_row:
+            perimetro = dict(perimetro_row)
+            # Buscar homunculos do perímetro
+            cur2.execute('SELECT id, simulacro, homunculo, saude, mental, status FROM nomeados WHERE perimetro_id = ?', (perimetro['id'],))
+            homunculos = [dict(h) for h in cur2.fetchall()]
+            perimetro['homunculos'] = homunculos
+            perimetro['homunculos_count'] = len(homunculos)
+            missao['perimetro'] = perimetro
+        else:
+            missao['perimetro'] = None
+        
+        missoes.append(missao)
+    
+    return jsonify(missoes), 200
+
+
+@app.route('/missoes/<int:mid>', methods=['GET'])
+def get_missao(mid):
+    """Retorna uma missão específica com seus agentes"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        SELECT m.id, m.nome, m.descricao, m.briefing, m.nex, m.status, m.data_criacao, m.data_conclusao, m.criado_por,
+               m.comandante_id, u.display_name as criador_nome, c.display_name as comandante_nome
+        FROM missoes m
+        LEFT JOIN users u ON m.criado_por = u.id
+        LEFT JOIN users c ON m.comandante_id = c.id
+        WHERE m.id = ?
+    ''', (mid,))
+    row = cur.fetchone()
+    
+    if row is None:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    missao = dict(row)
+    # Buscar foto do comandante
+    if missao.get('comandante_id'):
+        cur2 = db.cursor()
+        cur2.execute('SELECT foto FROM users WHERE id = ?', (missao['comandante_id'],))
+        cmd_foto = cur2.fetchone()
+        if cmd_foto and cmd_foto['foto']:
+            missao['comandante_foto'] = base64.b64encode(cmd_foto['foto']).decode('utf-8')
+        else:
+            missao['comandante_foto'] = None
+    else:
+        missao['comandante_foto'] = None
+    # Buscar agentes desta missão
+    cur.execute('''
+        SELECT u.id, u.username, u.display_name, u.cargo, u.grupo, ma.data_atribuicao
+        FROM missao_agentes ma
+        JOIN users u ON ma.user_id = u.id
+        WHERE ma.missao_id = ?
+    ''', (mid,))
+    agentes = []
+    for agente_row in cur.fetchall():
+        agente = dict(agente_row)
+        # Buscar foto do agente
+        cur2 = db.cursor()
+        cur2.execute('SELECT foto FROM users WHERE id = ?', (agente['id'],))
+        foto_row = cur2.fetchone()
+        if foto_row and foto_row['foto']:
+            agente['foto'] = base64.b64encode(foto_row['foto']).decode('utf-8')
+        else:
+            agente['foto'] = None
+        agentes.append(agente)
+    missao['agentes'] = agentes
+    missao['agentes_count'] = len(agentes)
+    
+    # Buscar perímetro vinculado a esta missão
+    cur2 = db.cursor()
+    cur2.execute('''
+        SELECT p.id, p.nome, p.cidade, p.class, p.status, p.populacao, p.descricao
+        FROM perimetros p
+        WHERE p.missao_id = ?
+    ''', (mid,))
+    perimetro_row = cur2.fetchone()
+    if perimetro_row:
+        perimetro = dict(perimetro_row)
+        # Buscar homunculos do perímetro
+        cur2.execute('SELECT id, simulacro, homunculo, saude, mental, status FROM nomeados WHERE perimetro_id = ?', (perimetro['id'],))
+        homunculos = [dict(h) for h in cur2.fetchall()]
+        perimetro['homunculos'] = homunculos
+        perimetro['homunculos_count'] = len(homunculos)
+        missao['perimetro'] = perimetro
+    else:
+        missao['perimetro'] = None
+    
+    return jsonify(missao), 200
+
+
+@app.route('/missoes', methods=['POST'])
+def create_missao():
+    """Cria uma nova missão"""
+    data = request.get_json() or {}
+    
+    nome = data.get('nome')
+    if not nome:
+        return jsonify({'erro': 'Nome é obrigatório'}), 400
+    
+    comandante_id = data.get('comandante_id')
+    if not comandante_id:
+        return jsonify({'erro': 'Comandante da missão é obrigatório'}), 400
+    
+    descricao = data.get('descricao', '')
+    briefing = data.get('briefing', '')
+    nex = data.get('nex', 0)
+    
+    # Validar NEX (0-100)
+    try:
+        nex = int(nex)
+        if nex < 0: nex = 0
+        if nex > 100: nex = 100
+    except:
+        nex = 0
+    
+    status = data.get('status', 'Não Iniciada')
+    
+    # Status válidos
+    status_validos = ['Não Iniciada', 'Fase de Preparação', 'Em Andamento', 'Concluída', 'Falha']
+    if status not in status_validos:
+        status = 'Não Iniciada'
+    
+    # Verificar se o comandante existe
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('SELECT id, display_name FROM users WHERE id = ?', (comandante_id,))
+    comandante = cur.fetchone()
+    if comandante is None:
+        return jsonify({'erro': 'Comandante não encontrado'}), 404
+    
+    # Obter ID do criador do token
+    criado_por = None
+    auth = request.headers.get('Authorization')
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                criado_por = payload.get('user_id')
+            except:
+                pass
+    
+    data_criacao = datetime.utcnow().isoformat()
+    
+    cur.execute('''
+        INSERT INTO missoes(nome, descricao, briefing, nex, status, data_criacao, criado_por, comandante_id) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (nome, descricao, briefing, nex, status, data_criacao, criado_por, comandante_id))
+    db.commit()
+    
+    new_id = cur.lastrowid
+    return jsonify({
+        'id': new_id, 
+        'nome': nome, 
+        'descricao': descricao,
+        'briefing': briefing,
+        'nex': nex,
+        'status': status,
+        'data_criacao': data_criacao,
+        'criado_por': criado_por,
+        'comandante_id': comandante_id,
+        'comandante_nome': comandante['display_name'],
+        'agentes': [],
+        'agentes_count': 0
+    }), 201
+
+
+@app.route('/missoes/<int:mid>', methods=['PUT'])
+def update_missao(mid):
+    """Atualiza uma missão"""
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM missoes WHERE id = ?', (mid,))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    data = request.get_json() or {}
+    
+    updates = []
+    values = []
+    
+    if 'nome' in data:
+        updates.append('nome = ?')
+        values.append(data['nome'])
+    if 'descricao' in data:
+        updates.append('descricao = ?')
+        values.append(data['descricao'])
+    if 'briefing' in data:
+        updates.append('briefing = ?')
+        values.append(data['briefing'])
+    if 'nex' in data:
+        try:
+            nex = int(data['nex'])
+            if nex < 0: nex = 0
+            if nex > 100: nex = 100
+            updates.append('nex = ?')
+            values.append(nex)
+        except:
+            pass
+    if 'comandante_id' in data:
+        # Verificar se o comandante existe
+        cur.execute('SELECT id FROM users WHERE id = ?', (data['comandante_id'],))
+        if cur.fetchone() is None:
+            return jsonify({'erro': 'Comandante não encontrado'}), 404
+        updates.append('comandante_id = ?')
+        values.append(data['comandante_id'])
+    if 'status' in data:
+        status_validos = ['Não Iniciada', 'Fase de Preparação', 'Em Andamento', 'Concluída', 'Falha']
+        if data['status'] in status_validos:
+            updates.append('status = ?')
+            values.append(data['status'])
+            # Se concluída ou falha, adicionar data de conclusão
+            if data['status'] in ['Concluída', 'Falha']:
+                updates.append('data_conclusao = ?')
+                values.append(datetime.utcnow().isoformat())
+    
+    if not updates:
+        return jsonify({'erro': 'Nenhum campo para atualizar'}), 400
+    
+    values.append(mid)
+    query = f'UPDATE missoes SET {", ".join(updates)} WHERE id = ?'
+    cur.execute(query, values)
+    db.commit()
+    
+    # Retornar missão atualizada
+    cur.execute('SELECT * FROM missoes WHERE id = ?', (mid,))
+    row = cur.fetchone()
+    return jsonify(dict(row)), 200
+
+
+@app.route('/missoes/<int:mid>', methods=['DELETE'])
+def delete_missao(mid):
+    """Deleta uma missão e suas associações com agentes"""
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM missoes WHERE id = ?', (mid,))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    # Deletar associações primeiro
+    cur.execute('DELETE FROM missao_agentes WHERE missao_id = ?', (mid,))
+    # Deletar missão
+    cur.execute('DELETE FROM missoes WHERE id = ?', (mid,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Missão deletada com sucesso'}), 200
+
+
+# ===================== ROTAS DE AGENTES EM MISSÕES =====================
+
+@app.route('/missoes/<int:mid>/agentes', methods=['GET'])
+def get_agentes_missao(mid):
+    """Lista todos os agentes de uma missão"""
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM missoes WHERE id = ?', (mid,))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    cur.execute('''
+        SELECT u.id, u.username, u.display_name, u.cargo, u.grupo, ma.data_atribuicao
+        FROM missao_agentes ma
+        JOIN users u ON ma.user_id = u.id
+        WHERE ma.missao_id = ?
+    ''', (mid,))
+    
+    agentes = []
+    for row in cur.fetchall():
+        agente = dict(row)
+        # Buscar foto
+        cur2 = db.cursor()
+        cur2.execute('SELECT foto FROM users WHERE id = ?', (agente['id'],))
+        foto_row = cur2.fetchone()
+        if foto_row and foto_row['foto']:
+            agente['foto'] = base64.b64encode(foto_row['foto']).decode('utf-8')
+        else:
+            agente['foto'] = None
+        agentes.append(agente)
+    
+    return jsonify(agentes), 200
+
+
+@app.route('/missoes/<int:mid>/agentes', methods=['POST'])
+def add_agente_missao(mid):
+    """Adiciona um agente a uma missão"""
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM missoes WHERE id = ?', (mid,))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    
+    if not user_id:
+        return jsonify({'erro': 'user_id é obrigatório'}), 400
+    
+    # Verificar se usuário existe
+    cur.execute('SELECT id, username, display_name FROM users WHERE id = ?', (user_id,))
+    user = cur.fetchone()
+    if user is None:
+        return jsonify({'erro': 'Usuário não encontrado'}), 404
+    
+    # Verificar se já está na missão
+    cur.execute('SELECT * FROM missao_agentes WHERE missao_id = ? AND user_id = ?', (mid, user_id))
+    if cur.fetchone() is not None:
+        return jsonify({'erro': 'Agente já está nesta missão'}), 400
+    
+    data_atribuicao = datetime.utcnow().isoformat()
+    cur.execute('INSERT INTO missao_agentes(missao_id, user_id, data_atribuicao) VALUES (?, ?, ?)',
+                (mid, user_id, data_atribuicao))
+    db.commit()
+    
+    # Buscar foto do usuário
+    cur.execute('SELECT foto FROM users WHERE id = ?', (user_id,))
+    foto_row = cur.fetchone()
+    foto = base64.b64encode(foto_row['foto']).decode('utf-8') if foto_row and foto_row['foto'] else None
+    
+    return jsonify({
+        'mensagem': f'Agente {user["display_name"]} adicionado à missão',
+        'agente': {
+            'id': user['id'],
+            'username': user['username'],
+            'display_name': user['display_name'],
+            'data_atribuicao': data_atribuicao,
+            'foto': foto
+        }
+    }), 201
+
+
+@app.route('/missoes/<int:mid>/agentes/<int:uid>', methods=['DELETE'])
+def remove_agente_missao(mid, uid):
+    """Remove um agente de uma missão"""
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM missoes WHERE id = ?', (mid,))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    cur.execute('SELECT * FROM missao_agentes WHERE missao_id = ? AND user_id = ?', (mid, uid))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Agente não está nesta missão'}), 404
+    
+    cur.execute('DELETE FROM missao_agentes WHERE missao_id = ? AND user_id = ?', (mid, uid))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Agente removido da missão'}), 200
+
+
+@app.route('/missoes/<int:mid>/notificar', methods=['POST'])
+def notificar_agentes_missao(mid):
+    """Notifica os agentes de uma missão (apenas o comandante pode notificar)"""
+    db = get_db()
+    cur = db.cursor()
+    
+    # Buscar missão
+    cur.execute('SELECT * FROM missoes WHERE id = ?', (mid,))
+    missao = cur.fetchone()
+    if missao is None:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    # Verificar se o usuário logado é o comandante
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if user_id != missao['comandante_id']:
+        return jsonify({'erro': 'Apenas o comandante da missão pode notificar os agentes'}), 403
+    
+    data = request.get_json() or {}
+    mensagem = data.get('mensagem', '')
+    
+    if not mensagem.strip():
+        return jsonify({'erro': 'Mensagem é obrigatória'}), 400
+    
+    # Buscar agentes da missão
+    cur.execute('''
+        SELECT u.id, u.username, u.display_name 
+        FROM missao_agentes ma
+        JOIN users u ON ma.user_id = u.id
+        WHERE ma.missao_id = ?
+    ''', (mid,))
+    agentes = cur.fetchall()
+    
+    if len(agentes) == 0:
+        return jsonify({'erro': 'Nenhum agente designado para esta missão'}), 400
+    
+    # Criar notificação para cada agente no banco de dados
+    data_criacao = datetime.utcnow().isoformat()
+    titulo = f"Missão: {missao['nome']}"
+    
+    for agente in agentes:
+        cur.execute('''
+            INSERT INTO notificacoes (user_id, tipo, titulo, mensagem, missao_id, remetente_id, lida, data_criacao)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (agente['id'], 'missao', titulo, mensagem, mid, user_id, 0, data_criacao))
+    db.commit()
+    
+    agentes_nomes = [a['display_name'] for a in agentes]
+    print(f"[NOTIFICAÇÃO] Missão '{missao['nome']}' - Comandante notificou: {agentes_nomes}")
+    print(f"[NOTIFICAÇÃO] Mensagem: {mensagem}")
+    
+    return jsonify({
+        'mensagem': 'Notificação enviada com sucesso',
+        'agentes_notificados': len(agentes),
+        'agentes': agentes_nomes
+    }), 200
+
+
+# ===================== ROTAS DE NOTIFICAÇÕES =====================
+
+@app.route('/notificacoes', methods=['GET'])
+def get_minhas_notificacoes():
+    """Retorna as notificações do usuário logado"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Buscar notificações do usuário, ordenadas por data (mais recentes primeiro)
+    cur.execute('''
+        SELECT n.id, n.tipo, n.titulo, n.mensagem, n.missao_id, n.remetente_id, n.lida, n.data_criacao,
+               u.display_name as remetente_nome, m.nome as missao_nome
+        FROM notificacoes n
+        LEFT JOIN users u ON n.remetente_id = u.id
+        LEFT JOIN missoes m ON n.missao_id = m.id
+        WHERE n.user_id = ?
+        ORDER BY n.data_criacao DESC
+        LIMIT 50
+    ''', (user_id,))
+    
+    notificacoes = []
+    for row in cur.fetchall():
+        notif = dict(row)
+        # Buscar foto do remetente
+        if notif.get('remetente_id'):
+            cur2 = db.cursor()
+            cur2.execute('SELECT foto FROM users WHERE id = ?', (notif['remetente_id'],))
+            foto_row = cur2.fetchone()
+            if foto_row and foto_row['foto']:
+                notif['remetente_foto'] = base64.b64encode(foto_row['foto']).decode('utf-8')
+            else:
+                notif['remetente_foto'] = None
+        else:
+            notif['remetente_foto'] = None
+        notificacoes.append(notif)
+    
+    return jsonify(notificacoes), 200
+
+
+@app.route('/notificacoes/count', methods=['GET'])
+def get_notificacoes_count():
+    """Retorna a contagem de notificações não lidas do usuário logado"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('SELECT COUNT(*) as count FROM notificacoes WHERE user_id = ? AND lida = 0', (user_id,))
+    row = cur.fetchone()
+    
+    return jsonify({'count': row['count']}), 200
+
+
+@app.route('/notificacoes/<int:nid>/lida', methods=['PUT'])
+def marcar_notificacao_lida(nid):
+    """Marca uma notificação como lida"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Verificar se a notificação pertence ao usuário
+    cur.execute('SELECT * FROM notificacoes WHERE id = ? AND user_id = ?', (nid, user_id))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Notificação não encontrada'}), 404
+    
+    cur.execute('UPDATE notificacoes SET lida = 1 WHERE id = ?', (nid,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Notificação marcada como lida'}), 200
+
+
+@app.route('/notificacoes/lidas', methods=['PUT'])
+def marcar_todas_lidas():
+    """Marca todas as notificações do usuário como lidas"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('UPDATE notificacoes SET lida = 1 WHERE user_id = ?', (user_id,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Todas as notificações foram marcadas como lidas'}), 200
+
+
+@app.route('/notificacoes', methods=['DELETE'])
+def limpar_notificacoes():
+    """Remove todas as notificações do usuário"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('DELETE FROM notificacoes WHERE user_id = ?', (user_id,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Todas as notificações foram removidas'}), 200
+
+
+# ===================== ROTAS DE CRIATURAS (BESTIÁRIO) =====================
+
+@app.route('/criaturas', methods=['GET'])
+def list_criaturas():
+    """Lista todas as criaturas do bestiário"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        SELECT c.*, u.display_name as criador_nome
+        FROM criaturas c
+        LEFT JOIN users u ON c.criado_por = u.id
+        ORDER BY c.nome
+    ''')
+    rows = cur.fetchall()
+    
+    result = []
+    for row in rows:
+        criatura = dict(row)
+        if criatura.get('imagem'):
+            criatura['imagem'] = base64.b64encode(criatura['imagem']).decode('utf-8')
+        else:
+            criatura['imagem'] = None
+        
+        # Buscar elementos da relação N:N
+        cur.execute('''
+            SELECT e.id, e.elemento as nome, ce.is_principal, e.imagem
+            FROM criatura_elementos ce
+            JOIN elementos e ON ce.elemento_id = e.id
+            WHERE ce.criatura_id = ?
+            ORDER BY ce.is_principal DESC, e.elemento
+        ''', (criatura['id'],))
+        elementos = []
+        for elem_row in cur.fetchall():
+            elementos.append({
+                'id': elem_row['id'],
+                'nome': elem_row['nome'],
+                'is_principal': bool(elem_row['is_principal']),
+                'imagem': base64.b64encode(elem_row['imagem']).decode('utf-8') if elem_row['imagem'] else None
+            })
+        criatura['elementos'] = elementos
+        
+        result.append(criatura)
+    
+    return jsonify(result), 200
+
+
+@app.route('/criaturas/<int:cid>', methods=['GET'])
+def get_criatura(cid):
+    """Retorna uma criatura específica"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        SELECT c.*, u.display_name as criador_nome
+        FROM criaturas c
+        LEFT JOIN users u ON c.criado_por = u.id
+        WHERE c.id = ?
+    ''', (cid,))
+    row = cur.fetchone()
+    
+    if row is None:
+        return jsonify({'erro': 'Criatura não encontrada'}), 404
+    
+    criatura = dict(row)
+    if criatura.get('imagem'):
+        criatura['imagem'] = base64.b64encode(criatura['imagem']).decode('utf-8')
+    else:
+        criatura['imagem'] = None
+    
+    # Buscar elementos da relação N:N
+    cur.execute('''
+        SELECT e.id, e.elemento as nome, ce.is_principal, e.imagem
+        FROM criatura_elementos ce
+        JOIN elementos e ON ce.elemento_id = e.id
+        WHERE ce.criatura_id = ?
+        ORDER BY ce.is_principal DESC, e.elemento
+    ''', (cid,))
+    elementos = []
+    for elem_row in cur.fetchall():
+        elementos.append({
+            'id': elem_row['id'],
+            'nome': elem_row['nome'],
+            'is_principal': bool(elem_row['is_principal']),
+            'imagem': base64.b64encode(elem_row['imagem']).decode('utf-8') if elem_row['imagem'] else None
+        })
+    criatura['elementos'] = elementos
+    
+    return jsonify(criatura), 200
+
+
+@app.route('/criaturas', methods=['POST'])
+def create_criatura():
+    """Cria uma nova criatura no bestiário"""
+    user = get_auth_user()
+    # Somente administradores e líderes podem criar/editar
+    allowed = {'administrador', 'lider'}
+    cargo_norm = (user.get('cargo', '') if user else '').strip().lower()
+    if not user or cargo_norm not in allowed:
+        return jsonify({'erro': 'Permissão negada: somente administradores ou líderes podem criar criaturas'}), 403
+    
+    data = request.get_json() or {}
+    
+    nome = data.get('nome')
+    if not nome:
+        return jsonify({'erro': 'Nome é obrigatório'}), 400
+    
+    imagem_data = None
+    if data.get('imagem'):
+        try:
+            # Remover prefixo data:image se presente
+            img_str = data['imagem']
+            if ',' in img_str:
+                img_str = img_str.split(',')[1]
+            imagem_data = base64.b64decode(img_str)
+        except Exception as e:
+            print(f"Erro ao decodificar imagem: {e}")
+            imagem_data = None
+    
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        INSERT INTO criaturas(nome, elemento, elementos_adicionais, deslocamento_metros, deslocamento_quadrados, escalada_metros, escalada_quadrados, 
+                              voo_metros, voo_quadrados, agi, forca, int, pre, vig, descricao, imagem, criado_por, data_criacao)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ''', (
+        nome,
+        data.get('elemento', ''),
+        data.get('elementos_adicionais', ''),
+        data.get('deslocamento_metros', ''),
+        data.get('deslocamento_quadrados', ''),
+        data.get('escalada_metros', ''),
+        data.get('escalada_quadrados', ''),
+        data.get('voo_metros', ''),
+        data.get('voo_quadrados', ''),
+        data.get('agi', 0),
+        data.get('forca', 0),
+        data.get('int', 0),
+        data.get('pre', 0),
+        data.get('vig', 0),
+        data.get('descricao', ''),
+        imagem_data,
+        user['id']
+    ))
+    db.commit()
+    
+    new_id = cur.lastrowid
+    
+    # Salvar elementos na tabela de associação N:N
+    elem_name_to_id = {"Sangue": 1, "Morte": 2, "Energia": 3, "Conhecimento": 4, "Medo": 5}
+    
+    # Elemento principal
+    elem_principal = data.get('elemento', '')
+    if elem_principal and elem_principal in elem_name_to_id:
+        try:
+            cur.execute('INSERT INTO criatura_elementos(criatura_id, elemento_id, is_principal) VALUES (?, ?, 1)',
+                       (new_id, elem_name_to_id[elem_principal]))
+        except:
+            pass
+    
+    # Elementos adicionais
+    elems_adicionais = data.get('elementos_adicionais', '')
+    if elems_adicionais:
+        for elem_nome in elems_adicionais.split(','):
+            elem_nome = elem_nome.strip()
+            if elem_nome and elem_nome in elem_name_to_id:
+                try:
+                    cur.execute('INSERT INTO criatura_elementos(criatura_id, elemento_id, is_principal) VALUES (?, ?, 0)',
+                               (new_id, elem_name_to_id[elem_nome]))
+                except:
+                    pass
+    db.commit()
+    
+    return jsonify({'id': new_id, 'nome': nome, 'mensagem': 'Criatura criada com sucesso'}), 201
+
+
+@app.route('/criaturas/<int:cid>', methods=['PUT'])
+def update_criatura(cid):
+    """Atualiza uma criatura"""
+    user = get_auth_user()
+    allowed = {'administrador', 'lider'}
+    cargo_norm = (user.get('cargo', '') if user else '').strip().lower()
+    if not user or cargo_norm not in allowed:
+        return jsonify({'erro': 'Permissão negada: somente administradores ou líderes podem editar criaturas'}), 403
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM criaturas WHERE id = ?', (cid,))
+    existing = cur.fetchone()
+    if existing is None:
+        return jsonify({'erro': 'Criatura não encontrada'}), 404
+    
+    data = request.get_json() or {}
+    
+    updates = []
+    values = []
+    
+    campos = ['nome', 'elemento', 'elementos_adicionais', 'deslocamento_metros', 'deslocamento_quadrados', 'escalada_metros', 'escalada_quadrados',
+              'voo_metros', 'voo_quadrados', 'agi', 'forca', 'int', 'pre', 'vig', 'descricao']
+    
+    for campo in campos:
+        if campo in data:
+            updates.append(f'{campo} = ?')
+            values.append(data[campo])
+    
+    if 'imagem' in data:
+        updates.append('imagem = ?')
+        if data['imagem']:
+            try:
+                # Remover prefixo data:image se presente
+                img_str = data['imagem']
+                if ',' in img_str:
+                    img_str = img_str.split(',')[1]
+                values.append(base64.b64decode(img_str))
+            except Exception as e:
+                print(f"Erro ao decodificar imagem: {e}")
+                values.append(None)
+        else:
+            values.append(None)
+    
+    if updates:
+        values.append(cid)
+        query = f'UPDATE criaturas SET {", ".join(updates)} WHERE id = ?'
+        cur.execute(query, values)
+    
+    # Sincronizar elementos na tabela de associação N:N
+    elem_name_to_id = {"Sangue": 1, "Morte": 2, "Energia": 3, "Conhecimento": 4, "Medo": 5}
+    
+    # Se elemento ou elementos_adicionais foram atualizados, recriar associações
+    if 'elemento' in data or 'elementos_adicionais' in data:
+        # Remover associações antigas
+        cur.execute('DELETE FROM criatura_elementos WHERE criatura_id = ?', (cid,))
+        
+        # Buscar valores atuais
+        cur.execute('SELECT elemento, elementos_adicionais FROM criaturas WHERE id = ?', (cid,))
+        row = cur.fetchone()
+        elem_principal = data.get('elemento', row['elemento'] if row else '') or ''
+        elems_adicionais = data.get('elementos_adicionais', row['elementos_adicionais'] if row else '') or ''
+        
+        # Adicionar elemento principal
+        if elem_principal and elem_principal in elem_name_to_id:
+            try:
+                cur.execute('INSERT INTO criatura_elementos(criatura_id, elemento_id, is_principal) VALUES (?, ?, 1)',
+                           (cid, elem_name_to_id[elem_principal]))
+            except:
+                pass
+        
+        # Adicionar elementos adicionais
+        if elems_adicionais:
+            for elem_nome in elems_adicionais.split(','):
+                elem_nome = elem_nome.strip()
+                if elem_nome and elem_nome in elem_name_to_id:
+                    try:
+                        cur.execute('INSERT INTO criatura_elementos(criatura_id, elemento_id, is_principal) VALUES (?, ?, 0)',
+                                   (cid, elem_name_to_id[elem_nome]))
+                    except:
+                        pass
+    
+    db.commit()
+    
+    return jsonify({'mensagem': 'Criatura atualizada com sucesso'}), 200
+
+
+@app.route('/criaturas/<int:cid>', methods=['DELETE'])
+def delete_criatura(cid):
+    """Deleta uma criatura"""
+    user = get_auth_user()
+    allowed = {'administrador', 'lider'}
+    cargo_norm = (user.get('cargo', '') if user else '').strip().lower()
+    if not user or cargo_norm not in allowed:
+        return jsonify({'erro': 'Permissão negada: somente administradores ou líderes podem remover criaturas'}), 403
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM criaturas WHERE id = ?', (cid,))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Criatura não encontrada'}), 404
+    
+    cur.execute('DELETE FROM criaturas WHERE id = ?', (cid,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Criatura removida com sucesso'}), 200
+
+
+# ==================== AGENTES (Ficha RPG) ====================
+
+@app.route('/agentes', methods=['GET'])
+def get_agentes():
+    """Lista todos os agentes (usuários) com dados de ficha RPG, filtro opcional por grupo"""
+    db = get_db()
+    cur = db.cursor()
+    
+    grupo = request.args.get('grupo')
+    
+    if grupo:
+        cur.execute('''
+             SELECT id, username, display_name, ativo, cargo, grupo, foto,
+                 origem, jogador, classe, nex, pe_turno, deslocamento,
+                   vida_atual, vida_max, sanidade_atual, sanidade_max,
+                   esforco_atual, esforco_max, defesa, bloqueio, esquiva,
+                   protecao, resistencias, proficiencias,
+                   agi, forca, inteligencia, pre, vig, dt_rituais
+            FROM users
+            WHERE grupo = ? AND ativo = 1
+            ORDER BY display_name
+        ''', (grupo,))
+    else:
+        cur.execute('''
+             SELECT id, username, display_name, ativo, cargo, grupo, foto,
+                 origem, jogador, classe, nex, pe_turno, deslocamento,
+                   vida_atual, vida_max, sanidade_atual, sanidade_max,
+                   esforco_atual, esforco_max, defesa, bloqueio, esquiva,
+                   protecao, resistencias, proficiencias,
+                   agi, forca, inteligencia, pre, vig, dt_rituais
+            FROM users
+            WHERE ativo = 1
+            ORDER BY display_name
+        ''')
+    
+    rows = cur.fetchall()
+    agentes = []
+    for row in rows:
+        agente = {
+            'id': row['id'],
+            'username': row['username'],
+            'display_name': row['display_name'],
+            'ativo': row['ativo'],
+            'cargo': row['cargo'],
+            'grupo': row['grupo'],
+            'foto': base64.b64encode(row['foto']).decode('utf-8') if row['foto'] else None,
+            'origem': row['origem'],
+            'jogador': row['jogador'],
+            'classe': row['classe'],
+            'nex': row['nex'],
+            'pe_turno': row['pe_turno'],
+            'deslocamento': row['deslocamento'],
+            'vida_atual': row['vida_atual'],
+            'vida_max': row['vida_max'],
+            'sanidade_atual': row['sanidade_atual'],
+            'sanidade_max': row['sanidade_max'],
+            'esforco_atual': row['esforco_atual'],
+            'esforco_max': row['esforco_max'],
+            'defesa': row['defesa'],
+            'bloqueio': row['bloqueio'],
+            'esquiva': row['esquiva'],
+            'protecao': row['protecao'],
+            'resistencias': row['resistencias'],
+            'proficiencias': row['proficiencias'],
+            'agi': row['agi'],
+            'forca': row['forca'],
+            'inteligencia': row['inteligencia'],
+            'pre': row['pre'],
+            'vig': row['vig'],
+            'dt_rituais': row['dt_rituais']
+        }
+        agentes.append(agente)
+    
+    return jsonify(agentes)
+
+
+@app.route('/agentes/<int:aid>', methods=['GET'])
+def get_agente(aid):
+    """Retorna dados de um agente específico"""
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('''
+        SELECT id, username, display_name, ativo, cargo, grupo, foto,
+               origem, jogador, classe, nex, pe_turno, deslocamento,
+               vida_atual, vida_max, sanidade_atual, sanidade_max,
+               esforco_atual, esforco_max, defesa, bloqueio, esquiva,
+               protecao, resistencias, proficiencias,
+               agi, forca, inteligencia, pre, vig, dt_rituais
+        FROM users
+        WHERE id = ?
+    ''', (aid,))
+    
+    row = cur.fetchone()
+    if not row:
+        return jsonify({'erro': 'Agente não encontrado'}), 404
+    
+    agente = {
+        'id': row['id'],
+        'username': row['username'],
+        'display_name': row['display_name'],
+        'ativo': row['ativo'],
+        'cargo': row['cargo'],
+        'grupo': row['grupo'],
+        'foto': base64.b64encode(row['foto']).decode('utf-8') if row['foto'] else None,
+        'origem': row['origem'],
+        'jogador': row['jogador'],
+        'classe': row['classe'],
+        'nex': row['nex'],
+        'pe_turno': row['pe_turno'],
+        'deslocamento': row['deslocamento'],
+        'vida_atual': row['vida_atual'],
+        'vida_max': row['vida_max'],
+        'sanidade_atual': row['sanidade_atual'],
+        'sanidade_max': row['sanidade_max'],
+        'esforco_atual': row['esforco_atual'],
+        'esforco_max': row['esforco_max'],
+        'defesa': row['defesa'],
+        'bloqueio': row['bloqueio'],
+        'esquiva': row['esquiva'],
+        'protecao': row['protecao'],
+        'resistencias': row['resistencias'],
+        'proficiencias': row['proficiencias'],
+        'agi': row['agi'],
+        'forca': row['forca'],
+        'inteligencia': row['inteligencia'],
+        'pre': row['pre'],
+        'vig': row['vig'],
+        'dt_rituais': row['dt_rituais']
+    }
+    
+    return jsonify(agente)
+
+
+@app.route('/agentes/<int:aid>', methods=['PUT'])
+def update_agente(aid):
+    """Atualiza dados de ficha RPG de um agente"""
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('SELECT * FROM users WHERE id = ?', (aid,))
+    if cur.fetchone() is None:
+        return jsonify({'erro': 'Agente não encontrado'}), 404
+    
+    data = request.get_json() or {}
+    
+    # Lista de campos que podem ser atualizados
+    allowed_fields = [
+        'origem', 'jogador', 'classe', 'nex', 'pe_turno', 'deslocamento',
+        'vida_atual', 'vida_max', 'sanidade_atual', 'sanidade_max',
+        'esforco_atual', 'esforco_max', 'defesa', 'bloqueio', 'esquiva',
+        'protecao', 'resistencias', 'proficiencias',
+        'agi', 'forca', 'inteligencia', 'pre', 'vig', 'dt_rituais', 'grupo'
+    ]
+    
+    updates = []
+    values = []
+    
+    for field in allowed_fields:
+        if field in data:
+            updates.append(f'{field} = ?')
+            values.append(data[field])
+    
+    # Tratar foto separadamente (base64)
+    if 'foto' in data:
+        updates.append('foto = ?')
+        if data['foto']:
+            try:
+                values.append(base64.b64decode(data['foto']))
+            except:
+                values.append(None)
+        else:
+            values.append(None)
+    
+    if not updates:
+        return jsonify({'erro': 'Nenhum campo para atualizar'}), 400
+    
+    values.append(aid)
+    query = f'UPDATE users SET {", ".join(updates)} WHERE id = ?'
+    cur.execute(query, values)
+    db.commit()
+    
+    return jsonify({'mensagem': 'Agente atualizado com sucesso'}), 200
 
 
 if __name__ == '__main__':
