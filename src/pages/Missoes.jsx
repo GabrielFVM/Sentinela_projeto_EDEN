@@ -72,6 +72,11 @@ export default function MissoesPage() {
 
   const token = localStorage.getItem('authToken');
   const currentUserId = token ? decodeToken(token)?.user_id : null;
+  const currentUserCargo = token ? decodeToken(token)?.cargo : null;
+  const currentUserGrupo = token ? decodeToken(token)?.grupo : null;
+  
+  // Verificar se é admin/líder (vê todas as missões)
+  const isAdmin = ['administrador', 'Lider'].includes(currentUserCargo) || currentUserGrupo === 'Serafim';
 
   // Bloquear scroll do body quando qualquer modal estiver aberto
   useEffect(() => {
@@ -106,7 +111,18 @@ export default function MissoesPage() {
       });
       const data = await response.json();
       if (!data.erro) {
-        setMissoes(data);
+        // Filtrar missões baseado no cargo do usuário
+        if (isAdmin) {
+          // Admin/Líder/Serafim vê todas as missões
+          setMissoes(data);
+        } else {
+          // Membro comum só vê missões em que está atribuído ou é comandante
+          const minhasMissoes = data.filter(missao => 
+            missao.comandante_id === currentUserId ||
+            (missao.agentes && missao.agentes.some(agente => agente.id === currentUserId))
+          );
+          setMissoes(minhasMissoes);
+        }
       }
     } catch (err) {
       console.error('Erro ao carregar missões:', err);
@@ -467,9 +483,45 @@ export default function MissoesPage() {
                   border: `1px solid ${missaoSelecionada?.id === missao.id ? '#4a90d9' : '#333'}`,
                   borderRadius: '10px',
                   cursor: 'pointer',
-                  transition: 'all 0.2s'
+                  transition: 'all 0.2s',
+                  position: 'relative'
                 }}
               >
+                {/* Botão Jogar */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`/missao/${missao.id}/jogar`);
+                  }}
+                  title="Modo Jogo"
+                  style={{
+                    position: 'absolute',
+                    top: '10px',
+                    right: '10px',
+                    background: 'rgba(155, 89, 182, 0.2)',
+                    border: '1px solid #9b59b6',
+                    color: '#9b59b6',
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1rem',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#9b59b6';
+                    e.currentTarget.style.color = '#fff';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(155, 89, 182, 0.2)';
+                    e.currentTarget.style.color = '#9b59b6';
+                  }}
+                >
+                  🎮
+                </button>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span style={{ fontSize: '1.2rem' }}>{getStatusIcon(missao.status)}</span>
                   <span style={{ color: '#fff', fontWeight: '600', flex: 1 }}>{missao.nome}</span>
@@ -681,29 +733,31 @@ export default function MissoesPage() {
                   ) : (
                     <div></div>
                   )}
-                  <button
-                    onClick={handleDeleteMissao}
-                    style={{
-                      background: 'rgba(217, 83, 79, 0.2)',
-                      border: '1px solid #d9534f',
-                      color: '#d9534f',
-                      padding: '10px 18px',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      fontWeight: '600',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px'
-                    }}
-                  >
-                    🗑️ Deletar Missão
-                  </button>
+                  {isComandante && (
+                    <button
+                      onClick={handleDeleteMissao}
+                      style={{
+                        background: 'rgba(217, 83, 79, 0.2)',
+                        border: '1px solid #d9534f',
+                        color: '#d9534f',
+                        padding: '10px 18px',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        fontWeight: '600',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px'
+                      }}
+                    >
+                      🗑️ Deletar Missão
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* Status selector */}
+              {/* Status selector - apenas comandante pode alterar */}
               <div style={{ marginTop: '20px' }}>
                 <label style={{ color: '#666', fontSize: '0.85rem', display: 'block', marginBottom: '8px' }}>
                   Status da Missão:
@@ -712,7 +766,8 @@ export default function MissoesPage() {
                   {STATUS_OPTIONS.map(status => (
                     <button
                       key={status}
-                      onClick={() => handleUpdateStatus(status)}
+                      onClick={() => isComandante && handleUpdateStatus(status)}
+                      disabled={!isComandante}
                       style={{
                         padding: '8px 15px',
                         borderRadius: '20px',
@@ -723,7 +778,8 @@ export default function MissoesPage() {
                         color: missaoSelecionada.status === status 
                           ? '#fff' 
                           : getStatusColor(status),
-                        cursor: 'pointer',
+                        cursor: isComandante ? 'pointer' : 'not-allowed',
+                        opacity: isComandante ? 1 : 0.6,
                         fontSize: '0.8rem',
                         fontWeight: '600',
                         transition: 'all 0.2s'
@@ -753,20 +809,22 @@ export default function MissoesPage() {
                 }}>
                   Agentes Designados ({missaoSelecionada.agentes?.length || 0})
                 </h3>
-                <button
-                  onClick={() => setShowAddAgentModal(true)}
-                  style={{
-                    background: 'linear-gradient(135deg, #4a90d9 0%, #357abd 100%)',
-                    border: 'none',
-                    color: '#fff',
-                    padding: '10px 20px',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontSize: '0.9rem'
-                  }}
-                >
-                  + Adicionar Agente
-                </button>
+                {isComandante && (
+                  <button
+                    onClick={() => setShowAddAgentModal(true)}
+                    style={{
+                      background: 'linear-gradient(135deg, #4a90d9 0%, #357abd 100%)',
+                      border: 'none',
+                      color: '#fff',
+                      padding: '10px 20px',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontSize: '0.9rem'
+                    }}
+                  >
+                    + Adicionar Agente
+                  </button>
+                )}
               </div>
 
               {/* Grid de agentes */}
@@ -829,31 +887,33 @@ export default function MissoesPage() {
                       </div>
                     </div>
 
-                    {/* Botão remover */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemoveAgente(agente.id);
-                      }}
-                      style={{
-                        position: 'absolute',
-                        top: '8px',
-                        right: '8px',
-                        background: 'rgba(217, 83, 79, 0.3)',
-                        border: 'none',
-                        color: '#d9534f',
-                        width: '24px',
-                        height: '24px',
-                        borderRadius: '50%',
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}
-                    >
-                      ✕
-                    </button>
+                    {/* Botão remover - apenas comandante */}
+                    {isComandante && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveAgente(agente.id);
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: '8px',
+                          right: '8px',
+                          background: 'rgba(217, 83, 79, 0.3)',
+                          border: 'none',
+                          color: '#d9534f',
+                          width: '24px',
+                          height: '24px',
+                          borderRadius: '50%',
+                          cursor: 'pointer',
+                          fontSize: '0.8rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 ))}
 

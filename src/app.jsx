@@ -4,6 +4,8 @@ import Header from "./components/Header";
 import CidadePage from "./pages/CidadePage";
 import SentinelaPage from "./pages/sentinela";
 import MissoesPage from "./pages/Missoes";
+import EquipesPage from "./pages/Equipes";
+import JogarMissaoPage from "./pages/JogarMissao";
 import Login from "./pages/Login";
 import { API_BASE_URL } from "./config";
 
@@ -195,6 +197,36 @@ export default function App() {
               <>
                 <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
                 <MissoesPage />
+              </>
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Rota de jogar missão */}
+        <Route
+          path="/missao/:id/jogar"
+          element={
+            isAuthenticated ? (
+              <>
+                <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
+                <JogarMissaoPage />
+              </>
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Rota de equipes */}
+        <Route
+          path="/equipes"
+          element={
+            isAuthenticated ? (
+              <>
+                <Header onLogout={handleLogout} username={displayName} cargo={cargo} />
+                <EquipesPage />
               </>
             ) : (
               <Navigate to="/login" replace />

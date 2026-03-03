@@ -52,6 +52,17 @@ export default function EditUser({ isOpen, onClose }) {
   const [success, setSuccess] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   
+  // Modal de Divisões
+  const [showDivisoesModal, setShowDivisoesModal] = useState(false);
+  const [draggingUser, setDraggingUser] = useState(null);
+  const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [cardRotation, setCardRotation] = useState(0);
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  const [hoveredDivisao, setHoveredDivisao] = useState(null);
+  const [expandedDivisao, setExpandedDivisao] = useState(null);
+  const divisaoRefs = useRef({});
+  
   // Form data para edição
   const [formData, setFormData] = useState({
     username: '',
@@ -208,11 +219,144 @@ export default function EditUser({ isOpen, onClose }) {
     }
   };
 
+  // Banir usuário
+  const handleBanirUsuario = async (userId, motivo) => {
+    setIsLoading(true);
+    setError('');
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/usuarios/${userId}/banir`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ motivo })
+      });
+      
+      if (response.ok) {
+        setSuccess('Usuário banido com sucesso!');
+        setSelectedUser(null);
+        loadUsers();
+        setTimeout(() => setSuccess(''), 3000);
+      } else {
+        const data = await response.json();
+        setError(data.erro || 'Erro ao banir usuário');
+      }
+    } catch (err) {
+      setError('Erro ao conectar com o servidor');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Filtrar usuários pela busca
   const filteredUsers = users.filter(u => 
     (u.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
      u.display_name?.toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  // Lista de divisões disponíveis
+  const DIVISOES = [
+    { id: 'Vanguarda', nome: 'Vanguarda', cor: '#e74c3c', icone: '⚔️', desc: 'Linha de frente em operações' },
+    { id: 'Irmandade', nome: 'Irmandade', cor: '#9b59b6', icone: '🤝', desc: 'Apoio e cooperação mútua' },
+    { id: 'Serafim', nome: 'Serafim', cor: '#f39c12', icone: '👑', desc: 'Administração suprema' }
+  ];
+
+  // IDs das divisões válidas
+  const divisoesValidas = DIVISOES.map(d => d.id);
+
+  // Usuários sem divisão (inclui quem tem divisão que não existe mais na lista)
+  const usuariosSemDivisao = users.filter(u => 
+    !u.grupo || u.grupo === '' || u.grupo === 'null' || !divisoesValidas.includes(u.grupo)
+  );
+
+  // Usuários por divisão
+  const usuariosPorDivisao = (divisaoId) => users.filter(u => u.grupo === divisaoId);
+
+  // Handler para iniciar drag de usuário
+  const handleUserDragStart = (e, user) => {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setDragOffset({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    });
+    setDragPosition({
+      x: e.clientX,
+      y: e.clientY
+    });
+    setLastMousePos({ x: e.clientX, y: e.clientY });
+    setDraggingUser(user);
+    setCardRotation(0);
+  };
+
+  // Handler para atualizar divisão do usuário
+  const handleUpdateDivisao = async (userId, novaDivisao) => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/agentes/${userId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ grupo: novaDivisao })
+      });
+      
+      if (response.ok) {
+        loadUsers();
+        setSuccess(`Divisão atualizada!`);
+        setTimeout(() => setSuccess(''), 3000);
+      }
+    } catch (err) {
+      setError('Erro ao atualizar divisão');
+    }
+  };
+
+  // Effect para drag and drop de divisões
+  useEffect(() => {
+    if (!draggingUser) return;
+
+    const handleMouseMove = (e) => {
+      const velocityX = e.clientX - lastMousePos.x;
+      const targetRotation = Math.max(-20, Math.min(20, velocityX * 0.6));
+      setCardRotation(prev => prev + (targetRotation - prev) * 0.3);
+      setDragPosition({ x: e.clientX, y: e.clientY });
+      setLastMousePos({ x: e.clientX, y: e.clientY });
+
+      // Verificar qual divisão está em hover
+      let foundDivisao = null;
+      Object.entries(divisaoRefs.current).forEach(([divisaoId, ref]) => {
+        if (ref) {
+          const rect = ref.getBoundingClientRect();
+          if (e.clientX >= rect.left && e.clientX <= rect.right &&
+              e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            foundDivisao = divisaoId;
+          }
+        }
+      });
+      setHoveredDivisao(foundDivisao);
+    };
+
+    const handleMouseUp = () => {
+      if (draggingUser && hoveredDivisao) {
+        // Atualizar divisão do usuário
+        handleUpdateDivisao(draggingUser.id, hoveredDivisao);
+      }
+      setDraggingUser(null);
+      setHoveredDivisao(null);
+      setCardRotation(0);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [draggingUser, lastMousePos, hoveredDivisao]);
 
   if (!isOpen) return null;
 
@@ -269,9 +413,41 @@ export default function EditUser({ isOpen, onClose }) {
                 margin: 0, 
                 color: '#ff6666',
                 fontSize: '1.4rem',
-                textShadow: '0 0 10px rgba(204, 0, 0, 0.5)'
+                textShadow: '0 0 10px rgba(204, 0, 0, 0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '15px'
               }}>
                 GERENCIAMENTO DE USUÁRIOS
+                <button
+                  onClick={() => setShowDivisoesModal(true)}
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(52, 152, 219, 0.3) 0%, rgba(52, 152, 219, 0.1) 100%)',
+                    border: '1px solid #3498db',
+                    color: '#3498db',
+                    padding: '6px 14px',
+                    borderRadius: '20px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: '600',
+                    textTransform: 'uppercase',
+                    letterSpacing: '1px',
+                    transition: 'all 0.3s ease',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.background = 'rgba(52, 152, 219, 0.4)';
+                    e.target.style.boxShadow = '0 0 15px rgba(52, 152, 219, 0.4)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.background = 'linear-gradient(135deg, rgba(52, 152, 219, 0.3) 0%, rgba(52, 152, 219, 0.1) 100%)';
+                    e.target.style.boxShadow = 'none';
+                  }}
+                >
+                  🏢 Divisões
+                </button>
               </h2>
               <p style={{ margin: 0, color: '#888', fontSize: '0.8rem' }}>
                 Acesso restrito ao grupo Serafim
@@ -647,6 +823,49 @@ export default function EditUser({ isOpen, onClose }) {
                   </button>
                   </div>
                 )}
+
+                {/* Botão Banir - Separado abaixo */}
+                {selectedUser.id !== 2 && !selectedUser.banido && (
+                  <div style={{ marginTop: '20px' }}>
+                    <button
+                      onClick={() => {
+                        const motivo = prompt('Digite o motivo do banimento:');
+                        if (motivo !== null && motivo.trim()) {
+                          if (window.confirm(`Tem certeza que deseja banir ${selectedUser.display_name || selectedUser.username}?\n\nMotivo: ${motivo}`)) {
+                            handleBanirUsuario(selectedUser.id, motivo);
+                          }
+                        }
+                      }}
+                      disabled={isLoading}
+                      style={{
+                        width: '100%',
+                        padding: '15px 20px',
+                        background: 'linear-gradient(135deg, rgba(192, 57, 43, 0.3) 0%, rgba(139, 26, 26, 0.3) 100%)',
+                        border: '2px solid #c0392b',
+                        borderRadius: '10px',
+                        color: '#ff6666',
+                        cursor: 'pointer',
+                        fontSize: '1rem',
+                        fontWeight: '600',
+                        transition: 'all 0.3s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '10px'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'linear-gradient(135deg, rgba(192, 57, 43, 0.5) 0%, rgba(139, 26, 26, 0.5) 100%)';
+                        e.currentTarget.style.boxShadow = '0 5px 20px rgba(192, 57, 43, 0.4)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'linear-gradient(135deg, rgba(192, 57, 43, 0.3) 0%, rgba(139, 26, 26, 0.3) 100%)';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                    >
+                      ⛔ BANIR USUÁRIO
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <div style={{
@@ -667,6 +886,581 @@ export default function EditUser({ isOpen, onClose }) {
           </div>
         </div>
       </div>
+
+      {/* Modal de Divisões */}
+      {showDivisoesModal && (
+        <>
+          {/* Overlay do Modal de Divisões */}
+          <div
+            onClick={() => {
+              if (!draggingUser) {
+                setShowDivisoesModal(false);
+                setExpandedDivisao(null);
+              }
+            }}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.95)',
+              zIndex: 10002,
+              backdropFilter: 'blur(8px)'
+            }}
+          />
+
+          {/* Modal de Divisões */}
+          <div
+            style={{
+              position: 'fixed',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '90%',
+              maxWidth: '900px',
+              maxHeight: '85vh',
+              background: 'linear-gradient(135deg, #0a0a15 0%, #1a1a2e 50%, #0d0d1a 100%)',
+              border: '2px solid #3498db',
+              borderRadius: '15px',
+              zIndex: 10003,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              boxShadow: '0 0 60px rgba(52, 152, 219, 0.3)',
+              userSelect: 'none'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{
+              padding: '20px',
+              borderBottom: '1px solid rgba(52, 152, 219, 0.3)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: 'rgba(52, 152, 219, 0.1)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <span style={{ fontSize: '1.8rem' }}>🏢</span>
+                <div>
+                  <h2 style={{ 
+                    margin: 0, 
+                    color: '#3498db',
+                    fontSize: '1.4rem',
+                    textShadow: '0 0 10px rgba(52, 152, 219, 0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '15px'
+                  }}>
+                    GERENCIAMENTO DE DIVISÕES
+                    <button
+                      onClick={() => setShowDivisoesModal(false)}
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(204, 0, 0, 0.3) 0%, rgba(204, 0, 0, 0.1) 100%)',
+                        border: '1px solid #cc0000',
+                        color: '#ff6666',
+                        padding: '6px 14px',
+                        borderRadius: '20px',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: '600',
+                        textTransform: 'uppercase',
+                        letterSpacing: '1px',
+                        transition: 'all 0.3s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.target.style.background = 'rgba(204, 0, 0, 0.4)';
+                        e.target.style.boxShadow = '0 0 15px rgba(204, 0, 0, 0.4)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.target.style.background = 'linear-gradient(135deg, rgba(204, 0, 0, 0.3) 0%, rgba(204, 0, 0, 0.1) 100%)';
+                        e.target.style.boxShadow = 'none';
+                      }}
+                    >
+                      👥 Usuários
+                    </button>
+                  </h2>
+                  <p style={{ margin: 0, color: '#888', fontSize: '0.8rem' }}>
+                    Arraste os agentes para as divisões
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowDivisoesModal(false);
+                  setExpandedDivisao(null);
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#3498db',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  padding: '5px 10px',
+                  borderRadius: '5px'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Conteúdo */}
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: expandedDivisao ? '250px 1fr 280px' : '280px 1fr', 
+              height: 'calc(85vh - 80px)',
+              overflow: 'hidden',
+              transition: 'all 0.3s ease'
+            }}>
+              {/* Coluna Esquerda - Agentes Sem Divisão */}
+              <div style={{ 
+                padding: '20px', 
+                borderRight: '1px solid rgba(52, 152, 219, 0.2)',
+                overflowY: 'auto',
+                background: 'rgba(0,0,0,0.3)'
+              }}>
+                <h3 style={{ 
+                  color: '#999', 
+                  margin: '0 0 15px 0', 
+                  fontSize: '0.95rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  👤 Sem Divisão ({usuariosSemDivisao.length})
+                </h3>
+                
+                {usuariosSemDivisao.length === 0 ? (
+                  <div style={{ 
+                    color: '#555', 
+                    textAlign: 'center', 
+                    padding: '40px 20px',
+                    border: '1px dashed #333',
+                    borderRadius: '10px'
+                  }}>
+                    <div style={{ fontSize: '2rem', marginBottom: '10px' }}>✓</div>
+                    Todos os agentes estão alocados
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {usuariosSemDivisao.map(user => (
+                      <div
+                        key={user.id}
+                        onMouseDown={(e) => handleUserDragStart(e, user)}
+                        style={{
+                          background: 'rgba(40, 40, 50, 0.9)',
+                          border: '2px solid #444',
+                          borderRadius: '10px',
+                          padding: '12px',
+                          cursor: 'grab',
+                          transition: 'all 0.2s',
+                          opacity: draggingUser?.id === user.id ? 0.3 : 1
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!draggingUser) {
+                            e.currentTarget.style.borderColor = '#3498db';
+                            e.currentTarget.style.transform = 'scale(1.02)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = '#444';
+                          e.currentTarget.style.transform = 'scale(1)';
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div style={{
+                            width: '40px',
+                            height: '40px',
+                            borderRadius: '50%',
+                            background: '#333',
+                            overflow: 'hidden',
+                            border: '2px solid #555',
+                            flexShrink: 0
+                          }}>
+                            {user.foto ? (
+                              <img
+                                src={`data:image/png;base64,${user.foto}`}
+                                alt={user.display_name}
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                draggable={false}
+                              />
+                            ) : (
+                              <div style={{
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: '#666',
+                                fontSize: '1.2rem'
+                              }}>
+                                👤
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              color: '#fff',
+                              fontWeight: '600',
+                              fontSize: '0.9rem',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}>
+                              {user.display_name || user.username}
+                            </div>
+                            <div style={{ color: '#666', fontSize: '0.75rem' }}>
+                              {user.cargo || 'Sem cargo'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Coluna Central - Grid de Divisões */}
+              <div style={{ 
+                padding: '20px', 
+                overflowY: 'auto',
+                background: 'rgba(0,0,0,0.2)'
+              }}>
+                <h3 style={{ 
+                  color: '#ccc', 
+                  margin: '0 0 20px 0', 
+                  fontSize: '1rem',
+                  textAlign: 'center'
+                }}>
+                  Arraste os agentes para as divisões abaixo
+                </h3>
+                
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                  gap: '15px'
+                }}>
+                  {DIVISOES.map(divisao => {
+                    const membros = usuariosPorDivisao(divisao.id);
+                    const isHovered = hoveredDivisao === divisao.id;
+                    const isExpanded = expandedDivisao === divisao.id;
+                    
+                    return (
+                      <div
+                        key={divisao.id}
+                        ref={el => divisaoRefs.current[divisao.id] = el}
+                        onClick={() => setExpandedDivisao(isExpanded ? null : divisao.id)}
+                        style={{
+                          background: isHovered 
+                            ? `linear-gradient(135deg, ${divisao.cor}40 0%, ${divisao.cor}20 100%)`
+                            : isExpanded
+                              ? `linear-gradient(135deg, ${divisao.cor}30 0%, ${divisao.cor}15 100%)`
+                              : 'rgba(30, 30, 40, 0.9)',
+                          border: `2px solid ${isHovered || isExpanded ? divisao.cor : '#333'}`,
+                          borderRadius: '12px',
+                          padding: '20px',
+                          cursor: 'pointer',
+                          transition: 'all 0.3s ease',
+                          textAlign: 'center',
+                          boxShadow: isHovered ? `0 0 30px ${divisao.cor}50` : 'none',
+                          transform: isHovered ? 'scale(1.05)' : 'scale(1)'
+                        }}
+                      >
+                        <div style={{
+                          width: '60px',
+                          height: '60px',
+                          margin: '0 auto 12px',
+                          borderRadius: '50%',
+                          background: divisao.cor,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '1.8rem',
+                          boxShadow: `0 0 20px ${divisao.cor}60`
+                        }}>
+                          {divisao.icone}
+                        </div>
+                        <div style={{ 
+                          color: divisao.cor, 
+                          fontWeight: '700', 
+                          fontSize: '1rem',
+                          marginBottom: '5px'
+                        }}>
+                          {divisao.nome}
+                        </div>
+                        <div style={{ color: '#888', fontSize: '0.75rem', marginBottom: '8px' }}>
+                          {divisao.desc}
+                        </div>
+                        <div style={{
+                          background: `${divisao.cor}30`,
+                          color: divisao.cor,
+                          padding: '4px 12px',
+                          borderRadius: '15px',
+                          fontSize: '0.8rem',
+                          fontWeight: '600',
+                          display: 'inline-block'
+                        }}>
+                          {membros.length} {membros.length === 1 ? 'membro' : 'membros'}
+                        </div>
+                        
+                        {isHovered && draggingUser && (
+                          <div style={{
+                            marginTop: '10px',
+                            color: '#27ae60',
+                            fontSize: '0.8rem',
+                            fontWeight: '600'
+                          }}>
+                            ✓ Solte para adicionar
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Coluna Direita - Membros da Divisão Expandida */}
+              {expandedDivisao && (
+                <div style={{ 
+                  padding: '20px', 
+                  borderLeft: '1px solid rgba(52, 152, 219, 0.2)',
+                  overflowY: 'auto',
+                  background: 'rgba(0,0,0,0.3)'
+                }}>
+                  {(() => {
+                    const divisao = DIVISOES.find(d => d.id === expandedDivisao);
+                    const membros = usuariosPorDivisao(expandedDivisao);
+                    
+                    return (
+                      <>
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'space-between',
+                          marginBottom: '20px'
+                        }}>
+                          <h3 style={{ 
+                            color: divisao.cor, 
+                            margin: 0, 
+                            fontSize: '1rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px'
+                          }}>
+                            <span style={{ fontSize: '1.3rem' }}>{divisao.icone}</span>
+                            {divisao.nome}
+                          </h3>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedDivisao(null);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#666',
+                              fontSize: '1.2rem',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        
+                        {membros.length === 0 ? (
+                          <div style={{ 
+                            color: '#555', 
+                            textAlign: 'center', 
+                            padding: '40px 20px',
+                            border: '1px dashed #333',
+                            borderRadius: '10px'
+                          }}>
+                            <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📭</div>
+                            Nenhum membro nesta divisão
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {membros.map(user => (
+                              <div
+                                key={user.id}
+                                style={{
+                                  background: `linear-gradient(135deg, ${divisao.cor}15 0%, rgba(30,30,40,0.9) 100%)`,
+                                  border: `2px solid ${divisao.cor}50`,
+                                  borderRadius: '10px',
+                                  padding: '12px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '10px'
+                                }}
+                              >
+                                <div style={{
+                                  width: '40px',
+                                  height: '40px',
+                                  borderRadius: '50%',
+                                  background: '#333',
+                                  overflow: 'hidden',
+                                  border: `2px solid ${divisao.cor}`,
+                                  flexShrink: 0
+                                }}>
+                                  {user.foto ? (
+                                    <img
+                                      src={`data:image/png;base64,${user.foto}`}
+                                      alt={user.display_name}
+                                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                    />
+                                  ) : (
+                                    <div style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      color: '#666',
+                                      fontSize: '1.2rem'
+                                    }}>
+                                      👤
+                                    </div>
+                                  )}
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{
+                                    color: '#fff',
+                                    fontWeight: '600',
+                                    fontSize: '0.9rem',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis'
+                                  }}>
+                                    {user.display_name || user.username}
+                                  </div>
+                                  <div style={{ color: '#888', fontSize: '0.75rem' }}>
+                                    {user.cargo || 'Sem cargo'}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleUpdateDivisao(user.id, '');
+                                  }}
+                                  style={{
+                                    background: 'rgba(231, 76, 60, 0.2)',
+                                    border: '1px solid #e74c3c',
+                                    color: '#e74c3c',
+                                    padding: '6px 10px',
+                                    borderRadius: '5px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    transition: 'all 0.2s'
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.target.style.background = 'rgba(231, 76, 60, 0.4)';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.target.style.background = 'rgba(231, 76, 60, 0.2)';
+                                  }}
+                                >
+                                  Remover
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Card sendo arrastado (Ghost) */}
+          {draggingUser && (
+            <div
+              style={{
+                position: 'fixed',
+                left: dragPosition.x - dragOffset.x,
+                top: dragPosition.y - dragOffset.y,
+                width: '200px',
+                background: 'rgba(40, 40, 60, 0.95)',
+                border: '2px solid #3498db',
+                borderRadius: '10px',
+                padding: '12px',
+                pointerEvents: 'none',
+                zIndex: 10010,
+                boxShadow: '0 10px 40px rgba(0,0,0,0.5), 0 0 25px rgba(52, 152, 219, 0.5)',
+                transform: `rotate(${cardRotation}deg) scale(1.05)`,
+                transition: 'transform 0.05s ease-out'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  background: '#333',
+                  overflow: 'hidden',
+                  border: '2px solid #3498db',
+                  flexShrink: 0
+                }}>
+                  {draggingUser.foto ? (
+                    <img
+                      src={`data:image/png;base64,${draggingUser.foto}`}
+                      alt={draggingUser.display_name}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      draggable={false}
+                    />
+                  ) : (
+                    <div style={{
+                      width: '100%',
+                      height: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#666',
+                      fontSize: '1.2rem'
+                    }}>
+                      👤
+                    </div>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    color: '#fff',
+                    fontWeight: '600',
+                    fontSize: '0.9rem',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}>
+                    {draggingUser.display_name || draggingUser.username}
+                  </div>
+                  <div style={{ color: '#888', fontSize: '0.75rem' }}>
+                    {draggingUser.cargo || 'Sem cargo'}
+                  </div>
+                </div>
+              </div>
+              
+              {/* Indicador de ação */}
+              <div style={{
+                marginTop: '10px',
+                textAlign: 'center',
+                fontSize: '0.75rem',
+                color: hoveredDivisao ? '#27ae60' : '#666',
+                fontWeight: hoveredDivisao ? '600' : '400'
+              }}>
+                {hoveredDivisao 
+                  ? `✓ Solte em ${DIVISOES.find(d => d.id === hoveredDivisao)?.nome}`
+                  : '↔ Arraste até uma divisão...'}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </>
   );
 }

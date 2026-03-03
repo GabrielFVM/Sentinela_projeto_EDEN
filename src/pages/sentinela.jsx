@@ -15,14 +15,27 @@ const decodeToken = (token) => {
 
 export default function SentinelaPage() {
   const [mteModalOpen, setMteModalOpen] = useState(false);
-  const [missoesModalOpen, setMissoesModalOpen] = useState(false);
   const [bestiarioModalOpen, setBestiarioModalOpen] = useState(false);
   const [agentesModalOpen, setAgentesModalOpen] = useState(false);
+  const [antagonistasModalOpen, setAntagonistasModalOpen] = useState(false);
   const [perimetros, setPerimetros] = useState([]);
-  const [missoes, setMissoes] = useState([]);
   const [criaturas, setCriaturas] = useState([]);
   const [agentes, setAgentes] = useState([]);
+  const [antagonistas, setAntagonistas] = useState([]);
+  const [selectedAntagonista, setSelectedAntagonista] = useState(null);
   const [elementos, setElementos] = useState([]);
+  const [userGrupo, setUserGrupo] = useState(null);
+  
+  // Obter grupo do usuário logado
+  useEffect(() => {
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      const decoded = decodeToken(token);
+      if (decoded) {
+        setUserGrupo(decoded.grupo);
+      }
+    }
+  }, []);
   
   // Estados para navegação de agentes
   const [selectedGrupo, setSelectedGrupo] = useState(null);
@@ -68,13 +81,6 @@ export default function SentinelaPage() {
     }
   }, [mteModalOpen]);
 
-  // Carregar missões quando o modal abrir
-  useEffect(() => {
-    if (missoesModalOpen) {
-      loadMissoes();
-    }
-  }, [missoesModalOpen]);
-
   // Carregar criaturas quando o modal abrir
   useEffect(() => {
     if (bestiarioModalOpen) {
@@ -89,6 +95,13 @@ export default function SentinelaPage() {
       loadAgentes(selectedGrupo);
     }
   }, [selectedGrupo]);
+
+  // Carregar antagonistas quando o modal abrir
+  useEffect(() => {
+    if (antagonistasModalOpen) {
+      loadAntagonistas();
+    }
+  }, [antagonistasModalOpen]);
 
   const loadPerimetros = async () => {
     setLoading(true);
@@ -105,26 +118,6 @@ export default function SentinelaPage() {
       }
     } catch (err) {
       console.error('Erro ao carregar perímetros:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadMissoes = async () => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`${API_BASE_URL}/missoes`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await response.json();
-      if (!data.erro) {
-        setMissoes(data);
-      }
-    } catch (err) {
-      console.error('Erro ao carregar missões:', err);
     } finally {
       setLoading(false);
     }
@@ -184,6 +177,77 @@ export default function SentinelaPage() {
       console.error('Erro ao carregar agentes:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAntagonistas = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/antagonistas`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      if (!data.erro) {
+        setAntagonistas(data);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar antagonistas:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBanirAgente = async (agenteId, motivo) => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/usuarios/${agenteId}/banir`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ motivo })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        alert('Usuário banido com sucesso!');
+        // Recarregar agentes
+        if (selectedGrupo) {
+          loadAgentes(selectedGrupo);
+        }
+        setSelectedAgente(null);
+      } else {
+        alert(data.erro || 'Erro ao banir usuário');
+      }
+    } catch (err) {
+      console.error('Erro ao banir:', err);
+      alert('Erro ao banir usuário');
+    }
+  };
+
+  const handleDesbanirAntagonista = async (antagonistaId) => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE_URL}/usuarios/${antagonistaId}/desbanir`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      if (response.ok) {
+        alert('Banimento removido com sucesso!');
+        loadAntagonistas();
+        setSelectedAntagonista(null);
+      } else {
+        alert(data.erro || 'Erro ao desbanir usuário');
+      }
+    } catch (err) {
+      console.error('Erro ao desbanir:', err);
+      alert('Erro ao desbanir usuário');
     }
   };
 
@@ -394,11 +458,6 @@ export default function SentinelaPage() {
     navigate(`/perimetro/${perimetroId}`);
   };
 
-  const handleMissaoClick = (missaoId) => {
-    setMissoesModalOpen(false);
-    navigate(`/missao/${missaoId}`);
-  };
-
   const getStatusColor = (status) => {
     switch (status) {
       case 'Não Iniciada': return '#666';
@@ -525,7 +584,7 @@ export default function SentinelaPage() {
 
         {/* Pasta Missões */}
         <div
-          onClick={() => setMissoesModalOpen(true)}
+          onClick={() => navigate('/missoes')}
           style={{
             width: '180px',
             height: '200px',
@@ -777,6 +836,176 @@ export default function SentinelaPage() {
             Fichas de Personagens
           </span>
         </div>
+
+        {/* Pasta Antagonistas */}
+        <div
+          onClick={() => setAntagonistasModalOpen(true)}
+          style={{
+            width: '180px',
+            height: '200px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '15px',
+            cursor: 'pointer',
+            background: 'rgba(20, 20, 20, 0.8)',
+            border: '2px solid #333',
+            borderRadius: '10px',
+            transition: 'all 0.3s ease',
+            position: 'relative'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = '#c0392b';
+            e.currentTarget.style.boxShadow = '0 0 20px rgba(192, 57, 43, 0.3)';
+            e.currentTarget.style.transform = 'translateY(-5px)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = '#333';
+            e.currentTarget.style.boxShadow = 'none';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }}
+        >
+          {/* Ícone de pasta */}
+          <div style={{
+            width: '80px',
+            height: '65px',
+            background: 'linear-gradient(135deg, #8b1a1a 0%, #5c0d0d 50%, #2d0808 100%)',
+            borderRadius: '3px 3px 8px 8px',
+            position: 'relative',
+            boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)'
+          }}>
+            {/* Aba da pasta */}
+            <div style={{
+              position: 'absolute',
+              top: '-10px',
+              left: '0',
+              width: '35px',
+              height: '12px',
+              background: 'linear-gradient(135deg, #c0392b 0%, #8b1a1a 100%)',
+              borderRadius: '3px 3px 0 0'
+            }} />
+            {/* Símbolo na pasta */}
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              color: '#e74c3c',
+              fontSize: '1.8rem',
+              fontWeight: 'bold',
+              textShadow: '0 0 10px rgba(231, 76, 60, 0.5)'
+            }}>
+              ⛔
+            </div>
+          </div>
+          
+          {/* Nome da pasta */}
+          <span style={{
+            color: '#e74c3c',
+            fontSize: '1rem',
+            fontWeight: '600',
+            textTransform: 'uppercase',
+            letterSpacing: '2px'
+          }}>
+            Antagonistas
+          </span>
+          
+          {/* Descrição */}
+          <span style={{
+            color: '#666',
+            fontSize: '0.7rem',
+            textAlign: 'center',
+            padding: '0 10px'
+          }}>
+            Inimigos do Guardião
+          </span>
+        </div>
+
+        {/* Pasta Equipes */}
+        <div
+          onClick={() => navigate('/equipes')}
+          style={{
+            width: '180px',
+            height: '200px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '15px',
+            cursor: 'pointer',
+            background: 'rgba(20, 20, 20, 0.8)',
+            border: '2px solid #333',
+            borderRadius: '10px',
+            transition: 'all 0.3s ease',
+            position: 'relative'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = '#f39c12';
+            e.currentTarget.style.boxShadow = '0 0 20px rgba(243, 156, 18, 0.3)';
+            e.currentTarget.style.transform = 'translateY(-5px)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = '#333';
+            e.currentTarget.style.boxShadow = 'none';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }}
+        >
+          {/* Ícone de pasta */}
+          <div style={{
+            width: '80px',
+            height: '65px',
+            background: 'linear-gradient(135deg, #8c5a1a 0%, #5c3a0d 50%, #3d2808 100%)',
+            borderRadius: '3px 3px 8px 8px',
+            position: 'relative',
+            boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)'
+          }}>
+            {/* Aba da pasta */}
+            <div style={{
+              position: 'absolute',
+              top: '-10px',
+              left: '0',
+              width: '35px',
+              height: '12px',
+              background: 'linear-gradient(135deg, #f39c12 0%, #8c5a1a 100%)',
+              borderRadius: '3px 3px 0 0'
+            }} />
+            {/* Símbolo na pasta */}
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              color: '#f39c12',
+              fontSize: '1.8rem',
+              fontWeight: 'bold',
+              textShadow: '0 0 10px rgba(243, 156, 18, 0.5)'
+            }}>
+              👥
+            </div>
+          </div>
+          
+          {/* Nome da pasta */}
+          <span style={{
+            color: '#cccccc',
+            fontSize: '1rem',
+            fontWeight: '600',
+            textTransform: 'uppercase',
+            letterSpacing: '2px'
+          }}>
+            Equipes
+          </span>
+          
+          {/* Descrição */}
+          <span style={{
+            color: '#666',
+            fontSize: '0.7rem',
+            textAlign: 'center',
+            padding: '0 10px'
+          }}>
+            Grupos de Agentes
+          </span>
+        </div>
       </div>
 
       {/* Modal MTE */}
@@ -966,275 +1195,6 @@ export default function SentinelaPage() {
                       color: '#666'
                     }}>
                       Nenhum perímetro cadastrado
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Missões */}
-      {missoesModalOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0, 0, 0, 0.9)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999
-          }}
-          onClick={() => setMissoesModalOpen(false)}
-        >
-          <div
-            style={{
-              background: 'linear-gradient(180deg, #1a1a1a 0%, #0d0d0d 100%)',
-              border: '2px solid #4a90d9',
-              borderRadius: '15px',
-              width: '90%',
-              maxWidth: '800px',
-              maxHeight: '80vh',
-              overflow: 'hidden',
-              boxShadow: '0 0 40px rgba(74, 144, 217, 0.3)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header do modal */}
-            <div style={{
-              padding: '25px 30px',
-              borderBottom: '1px solid #333',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
-              <div>
-                <h2 style={{
-                  margin: 0,
-                  color: '#4a90d9',
-                  fontSize: '1.4rem',
-                  textTransform: 'uppercase',
-                  letterSpacing: '3px'
-                }}>
-                  Missões
-                </h2>
-                <p style={{
-                  margin: '8px 0 0 0',
-                  color: '#666',
-                  fontSize: '0.85rem'
-                }}>
-                  Selecione uma missão para gerenciar
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                <button
-                  onClick={() => {
-                    setMissoesModalOpen(false);
-                    navigate('/missoes');
-                  }}
-                  style={{
-                    background: 'linear-gradient(135deg, #4a90d9 0%, #357abd 100%)',
-                    border: 'none',
-                    color: '#fff',
-                    fontSize: '0.9rem',
-                    cursor: 'pointer',
-                    padding: '10px 20px',
-                    borderRadius: '8px',
-                    transition: 'all 0.2s'
-                  }}
-                  onMouseEnter={(e) => e.target.style.transform = 'scale(1.05)'}
-                  onMouseLeave={(e) => e.target.style.transform = 'scale(1)'}
-                >
-                  + Nova Missão
-                </button>
-                <button
-                  onClick={() => setMissoesModalOpen(false)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#666',
-                    fontSize: '1.5rem',
-                    cursor: 'pointer',
-                    padding: '5px 10px',
-                    transition: 'color 0.2s'
-                  }}
-                  onMouseEnter={(e) => e.target.style.color = '#4a90d9'}
-                  onMouseLeave={(e) => e.target.style.color = '#666'}
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            {/* Conteúdo do modal */}
-            <div style={{
-              padding: '20px 30px',
-              maxHeight: 'calc(80vh - 100px)',
-              overflowY: 'auto'
-            }}>
-              {loading ? (
-                <div style={{
-                  textAlign: 'center',
-                  padding: '40px',
-                  color: '#666'
-                }}>
-                  Carregando missões...
-                </div>
-              ) : (
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '15px'
-                }}>
-                  {missoes.map((missao) => (
-                    <div
-                      key={missao.id}
-                      onClick={() => handleMissaoClick(missao.id)}
-                      style={{
-                        padding: '20px',
-                        background: 'rgba(30, 30, 30, 0.8)',
-                        border: '1px solid #333',
-                        borderRadius: '10px',
-                        cursor: 'pointer',
-                        transition: 'all 0.3s ease',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '20px'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#4a90d9';
-                        e.currentTarget.style.background = 'rgba(74, 144, 217, 0.1)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#333';
-                        e.currentTarget.style.background = 'rgba(30, 30, 30, 0.8)';
-                      }}
-                    >
-                      {/* Status badge */}
-                      <div style={{
-                        width: '60px',
-                        height: '60px',
-                        background: 'linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%)',
-                        borderRadius: '10px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '1.8rem',
-                        border: `2px solid ${getStatusColor(missao.status)}`
-                      }}>
-                        🎯
-                      </div>
-
-                      {/* Info da missão */}
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <h3 style={{
-                            margin: 0,
-                            color: '#4a90d9',
-                            fontSize: '1.1rem',
-                            fontWeight: '600'
-                          }}>
-                            {missao.nome}
-                          </h3>
-                          <span style={{
-                            padding: '3px 10px',
-                            borderRadius: '12px',
-                            fontSize: '0.7rem',
-                            fontWeight: '600',
-                            background: `${getStatusColor(missao.status)}33`,
-                            color: getStatusColor(missao.status),
-                            border: `1px solid ${getStatusColor(missao.status)}`
-                          }}>
-                            {missao.status}
-                          </span>
-                        </div>
-                        <p style={{
-                          margin: '5px 0 0 0',
-                          color: '#888',
-                          fontSize: '0.85rem'
-                        }}>
-                          {missao.descricao || 'Sem descrição'}
-                        </p>
-                        <div style={{
-                          display: 'flex',
-                          gap: '20px',
-                          marginTop: '10px',
-                          alignItems: 'center'
-                        }}>
-                          <span style={{
-                            color: '#666',
-                            fontSize: '0.75rem'
-                          }}>
-                            👤 Agentes: {missao.agentes_count || 0}
-                          </span>
-                          {/* Avatares dos agentes */}
-                          <div style={{ display: 'flex', marginLeft: '10px' }}>
-                            {missao.agentes && missao.agentes.slice(0, 5).map((agente, idx) => (
-                              <div
-                                key={agente.id}
-                                style={{
-                                  width: '28px',
-                                  height: '28px',
-                                  borderRadius: '50%',
-                                  border: '2px solid #1a1a1a',
-                                  marginLeft: idx > 0 ? '-10px' : '0',
-                                  background: agente.foto ? `url(data:image/jpeg;base64,${agente.foto}) center/cover` : '#333',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  color: '#888',
-                                  fontSize: '0.7rem',
-                                  fontWeight: 'bold'
-                                }}
-                                title={agente.display_name}
-                              >
-                                {!agente.foto && (agente.display_name?.[0] || '?')}
-                              </div>
-                            ))}
-                            {missao.agentes && missao.agentes.length > 5 && (
-                              <div style={{
-                                width: '28px',
-                                height: '28px',
-                                borderRadius: '50%',
-                                border: '2px solid #1a1a1a',
-                                marginLeft: '-10px',
-                                background: '#444',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: '#ccc',
-                                fontSize: '0.6rem',
-                                fontWeight: 'bold'
-                              }}>
-                                +{missao.agentes.length - 5}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Seta */}
-                      <div style={{
-                        color: '#4a90d9',
-                        fontSize: '1.5rem'
-                      }}>
-                        →
-                      </div>
-                    </div>
-                  ))}
-
-                  {missoes.length === 0 && !loading && (
-                    <div style={{
-                      textAlign: 'center',
-                      padding: '40px',
-                      color: '#666'
-                    }}>
-                      Nenhuma missão cadastrada
                     </div>
                   )}
                 </div>
@@ -2717,43 +2677,89 @@ export default function SentinelaPage() {
                     </div>
                   </div>
 
-                  {/* Placeholder 2 */}
+                  {/* Vanguarda */}
                   <div
+                    onClick={() => setSelectedGrupo('Vanguarda')}
                     style={{
-                      background: 'rgba(100, 100, 100, 0.1)',
-                      border: '2px dashed #333',
+                      background: 'rgba(231, 76, 60, 0.1)',
+                      border: '2px solid #333',
                       borderRadius: '15px',
                       padding: '30px 20px',
                       textAlign: 'center',
-                      opacity: 0.5
+                      cursor: 'pointer',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = '#e74c3c';
+                      e.currentTarget.style.transform = 'translateY(-5px)';
+                      e.currentTarget.style.boxShadow = '0 10px 30px rgba(231, 76, 60, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = '#333';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
                     }}
                   >
-                    <div style={{ fontSize: '3rem', marginBottom: '15px' }}>❓</div>
-                    <div style={{ color: '#666', fontSize: '1.2rem', fontWeight: '700', marginBottom: '8px' }}>
-                      ???
+                    <div style={{ marginBottom: '15px', display: 'flex', justifyContent: 'center' }}>
+                      <img 
+                        src={`${import.meta.env.BASE_URL}vanguarda.png`} 
+                        alt="Vanguarda" 
+                        style={{ 
+                          width: '90px', 
+                          height: '90px', 
+                          objectFit: 'contain',
+                          filter: 'drop-shadow(0 0 12px rgba(231, 76, 60, 0.6)) drop-shadow(0 0 25px rgba(231, 76, 60, 0.4))'
+                        }} 
+                      />
                     </div>
-                    <div style={{ color: '#444', fontSize: '0.8rem' }}>
-                      Em desenvolvimento
+                    <div style={{ color: '#e74c3c', fontSize: '1.2rem', fontWeight: '700', marginBottom: '8px' }}>
+                      VANGUARDA
+                    </div>
+                    <div style={{ color: '#666', fontSize: '0.8rem' }}>
+                      Força de Combate
                     </div>
                   </div>
 
-                  {/* Placeholder 3 */}
+                  {/* Irmandade */}
                   <div
+                    onClick={() => setSelectedGrupo('Irmandade')}
                     style={{
-                      background: 'rgba(100, 100, 100, 0.1)',
-                      border: '2px dashed #333',
+                      background: 'rgba(155, 89, 182, 0.1)',
+                      border: '2px solid #333',
                       borderRadius: '15px',
                       padding: '30px 20px',
                       textAlign: 'center',
-                      opacity: 0.5
+                      cursor: 'pointer',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = '#9b59b6';
+                      e.currentTarget.style.transform = 'translateY(-5px)';
+                      e.currentTarget.style.boxShadow = '0 10px 30px rgba(155, 89, 182, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = '#333';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
                     }}
                   >
-                    <div style={{ fontSize: '3rem', marginBottom: '15px' }}>❓</div>
-                    <div style={{ color: '#666', fontSize: '1.2rem', fontWeight: '700', marginBottom: '8px' }}>
-                      ???
+                    <div style={{ marginBottom: '15px', display: 'flex', justifyContent: 'center' }}>
+                      <img 
+                        src={`${import.meta.env.BASE_URL}irmandade.png`} 
+                        alt="Irmandade" 
+                        style={{ 
+                          width: '90px', 
+                          height: '90px', 
+                          objectFit: 'contain',
+                          filter: 'drop-shadow(0 0 12px rgba(155, 89, 182, 0.6)) drop-shadow(0 0 25px rgba(155, 89, 182, 0.4))'
+                        }} 
+                      />
                     </div>
-                    <div style={{ color: '#444', fontSize: '0.8rem' }}>
-                      Em desenvolvimento
+                    <div style={{ color: '#9b59b6', fontSize: '1.2rem', fontWeight: '700', marginBottom: '8px' }}>
+                      IRMANDADE
+                    </div>
+                    <div style={{ color: '#666', fontSize: '0.8rem' }}>
+                      Ordem Oculta
                     </div>
                   </div>
                 </div>
@@ -3164,6 +3170,384 @@ export default function SentinelaPage() {
                         )}
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Antagonistas */}
+      {antagonistasModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.9)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999
+          }}
+          onClick={() => {
+            setAntagonistasModalOpen(false);
+            setSelectedAntagonista(null);
+          }}
+        >
+          <div
+            style={{
+              background: 'linear-gradient(180deg, #1a1a1a 0%, #0d0d0d 100%)',
+              border: '2px solid #c0392b',
+              borderRadius: '15px',
+              width: '95%',
+              maxWidth: selectedAntagonista ? '1200px' : '1000px',
+              maxHeight: '90vh',
+              overflow: 'hidden',
+              boxShadow: '0 0 40px rgba(192, 57, 43, 0.3)',
+              transition: 'max-width 0.3s ease'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header do modal */}
+            <div style={{
+              padding: '25px 30px',
+              borderBottom: '1px solid #333',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                {selectedAntagonista && (
+                  <button
+                    onClick={() => setSelectedAntagonista(null)}
+                    style={{
+                      background: 'rgba(192, 57, 43, 0.2)',
+                      border: '1px solid #c0392b',
+                      borderRadius: '8px',
+                      color: '#c0392b',
+                      cursor: 'pointer',
+                      padding: '8px 15px',
+                      fontSize: '0.9rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    ← Voltar
+                  </button>
+                )}
+                <div>
+                  <h2 style={{
+                    margin: 0,
+                    color: '#c0392b',
+                    fontSize: '1.4rem',
+                    textTransform: 'uppercase',
+                    letterSpacing: '3px'
+                  }}>
+                    {selectedAntagonista ? selectedAntagonista.display_name : 'Antagonistas'}
+                  </h2>
+                  <p style={{
+                    margin: '8px 0 0 0',
+                    color: '#666',
+                    fontSize: '0.85rem'
+                  }}>
+                    {selectedAntagonista ? 'Inimigo do Guardião' : 'Usuários banidos do sistema'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setAntagonistasModalOpen(false);
+                  setSelectedAntagonista(null);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#666',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  padding: '5px 10px',
+                  transition: 'color 0.2s'
+                }}
+                onMouseEnter={(e) => e.target.style.color = '#c0392b'}
+                onMouseLeave={(e) => e.target.style.color = '#666'}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Conteúdo do modal */}
+            <div style={{
+              padding: '25px 30px',
+              maxHeight: 'calc(90vh - 100px)',
+              overflowY: 'auto'
+            }}>
+              {!selectedAntagonista ? (
+                /* Lista de Antagonistas */
+                <div>
+                  {loading ? (
+                    <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                      Carregando antagonistas...
+                    </div>
+                  ) : antagonistas.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '60px', color: '#666' }}>
+                      <div style={{ fontSize: '4rem', marginBottom: '20px' }}>✅</div>
+                      <div style={{ fontSize: '1.2rem' }}>Nenhum antagonista registrado</div>
+                      <div style={{ fontSize: '0.9rem', marginTop: '10px' }}>O Guardião está em paz... por enquanto.</div>
+                    </div>
+                  ) : (
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                      gap: '20px'
+                    }}>
+                      {antagonistas.map((antag) => (
+                        <div
+                          key={antag.id}
+                          onClick={() => setSelectedAntagonista(antag)}
+                          style={{
+                            background: 'rgba(192, 57, 43, 0.1)',
+                            border: '1px solid #5c0d0d',
+                            borderRadius: '12px',
+                            padding: '20px',
+                            cursor: 'pointer',
+                            transition: 'all 0.3s ease'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.borderColor = '#c0392b';
+                            e.currentTarget.style.transform = 'translateY(-3px)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.borderColor = '#5c0d0d';
+                            e.currentTarget.style.transform = 'translateY(0)';
+                          }}
+                        >
+                          <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                            {/* Avatar */}
+                            <div style={{
+                              width: '60px',
+                              height: '60px',
+                              borderRadius: '50%',
+                              background: antag.foto 
+                                ? `url(data:image/jpeg;base64,${antag.foto}) center/cover`
+                                : 'linear-gradient(135deg, #c0392b 0%, #8b1a1a 100%)',
+                              border: '2px solid #c0392b',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '1.5rem',
+                              flexShrink: 0,
+                              filter: 'grayscale(30%)'
+                            }}>
+                              {!antag.foto && '⛔'}
+                            </div>
+                            
+                            {/* Info */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ 
+                                color: '#e74c3c', 
+                                fontWeight: '700', 
+                                fontSize: '1.1rem',
+                                marginBottom: '4px',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}>
+                                {antag.display_name}
+                              </div>
+                              <div style={{ color: '#888', fontSize: '0.85rem', marginBottom: '5px' }}>
+                                Ex-{antag.grupo || 'Membro'}
+                              </div>
+                              <div style={{ 
+                                color: '#666', 
+                                fontSize: '0.75rem',
+                                fontStyle: 'italic',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}>
+                                "{antag.motivo_banimento || 'Motivo não especificado'}"
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Ficha do Antagonista */
+                <div style={{ display: 'flex', gap: '30px', flexWrap: 'wrap' }}>
+                  {/* Coluna Esquerda - Avatar e Info */}
+                  <div style={{ flex: '0 0 300px' }}>
+                    {/* Avatar */}
+                    <div style={{
+                      width: '100%',
+                      aspectRatio: '1',
+                      borderRadius: '15px',
+                      background: selectedAntagonista.foto 
+                        ? `url(data:image/jpeg;base64,${selectedAntagonista.foto}) center/cover`
+                        : 'linear-gradient(135deg, #c0392b 0%, #8b1a1a 100%)',
+                      border: '3px solid #c0392b',
+                      marginBottom: '20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '6rem',
+                      filter: 'grayscale(30%)'
+                    }}>
+                      {!selectedAntagonista.foto && '⛔'}
+                    </div>
+
+                    {/* Info do Banimento */}
+                    <div style={{
+                      background: 'rgba(192, 57, 43, 0.15)',
+                      border: '1px solid #c0392b',
+                      borderRadius: '10px',
+                      padding: '20px',
+                      marginBottom: '20px'
+                    }}>
+                      <div style={{ color: '#c0392b', fontWeight: '600', marginBottom: '15px', fontSize: '0.9rem' }}>
+                        INFORMAÇÕES DO BANIMENTO
+                      </div>
+                      <div style={{ marginBottom: '10px' }}>
+                        <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>MOTIVO</div>
+                        <div style={{ color: '#fff', fontSize: '0.9rem' }}>{selectedAntagonista.motivo_banimento || 'Não especificado'}</div>
+                      </div>
+                      <div style={{ marginBottom: '10px' }}>
+                        <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>DATA DO BANIMENTO</div>
+                        <div style={{ color: '#fff', fontSize: '0.9rem' }}>
+                          {selectedAntagonista.data_banimento ? new Date(selectedAntagonista.data_banimento).toLocaleString('pt-BR') : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>BANIDO POR</div>
+                        <div style={{ color: '#fff', fontSize: '0.9rem' }}>{selectedAntagonista.banido_por_nome || '-'}</div>
+                      </div>
+                    </div>
+
+                    {/* Botão Desbanir - Apenas para Serafins */}
+                    {userGrupo === 'Serafim' && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Tem certeza que deseja remover o banimento de ${selectedAntagonista.display_name}?`)) {
+                            handleDesbanirAntagonista(selectedAntagonista.id);
+                          }
+                        }}
+                        style={{
+                          width: '100%',
+                          background: 'linear-gradient(135deg, #27ae60 0%, #1a5c3a 100%)',
+                          border: 'none',
+                          borderRadius: '10px',
+                          color: '#fff',
+                          padding: '15px 20px',
+                          fontSize: '1rem',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '10px',
+                          transition: 'all 0.3s ease'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'scale(1.02)';
+                          e.currentTarget.style.boxShadow = '0 5px 20px rgba(39, 174, 96, 0.4)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'scale(1)';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }}
+                      >
+                        ✅ REMOVER BANIMENTO
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Coluna Direita - Dados do Ex-Agente */}
+                  <div style={{ flex: 1, minWidth: '300px' }}>
+                    <div style={{
+                      background: 'rgba(0, 0, 0, 0.3)',
+                      borderRadius: '15px',
+                      padding: '20px',
+                      marginBottom: '20px'
+                    }}>
+                      <div style={{ color: '#c0392b', fontWeight: '600', marginBottom: '15px', fontSize: '0.9rem' }}>
+                        DADOS DO EX-AGENTE
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                        <div>
+                          <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>NOME</div>
+                          <div style={{ color: '#fff', fontWeight: '600' }}>{selectedAntagonista.display_name}</div>
+                        </div>
+                        <div>
+                          <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>USUÁRIO</div>
+                          <div style={{ color: '#fff', fontWeight: '600' }}>{selectedAntagonista.username}</div>
+                        </div>
+                        <div>
+                          <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>EX-GRUPO</div>
+                          <div style={{ color: '#e74c3c', fontWeight: '600' }}>{selectedAntagonista.grupo || 'Observador'}</div>
+                        </div>
+                        <div>
+                          <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>EX-CARGO</div>
+                          <div style={{ color: '#e74c3c', fontWeight: '600' }}>{selectedAntagonista.cargo || '-'}</div>
+                        </div>
+                        <div>
+                          <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>CLASSE</div>
+                          <div style={{ color: '#fff', fontWeight: '600' }}>{selectedAntagonista.classe || '-'}</div>
+                        </div>
+                        <div>
+                          <div style={{ color: '#666', fontSize: '0.75rem', marginBottom: '3px' }}>NEX</div>
+                          <div style={{ color: '#fff', fontWeight: '600' }}>{selectedAntagonista.nex || 5}%</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Atributos */}
+                    <div style={{
+                      background: 'rgba(0, 0, 0, 0.3)',
+                      borderRadius: '15px',
+                      padding: '20px'
+                    }}>
+                      <div style={{ color: '#c0392b', fontWeight: '600', marginBottom: '15px', fontSize: '0.9rem' }}>
+                        ATRIBUTOS (REGISTRO)
+                      </div>
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(5, 1fr)',
+                        gap: '10px'
+                      }}>
+                        {['agi', 'forca', 'inteligencia', 'pre', 'vig'].map((attr) => (
+                          <div key={attr} style={{
+                            background: 'rgba(192, 57, 43, 0.15)',
+                            borderRadius: '10px',
+                            padding: '15px 10px',
+                            textAlign: 'center',
+                            border: '1px solid #5c0d0d'
+                          }}>
+                            <div style={{ 
+                              color: '#c0392b', 
+                              fontSize: '0.7rem', 
+                              fontWeight: '600',
+                              marginBottom: '5px' 
+                            }}>
+                              {attr === 'inteligencia' ? 'INT' : attr.toUpperCase()}
+                            </div>
+                            <div style={{ 
+                              color: '#fff', 
+                              fontSize: '1.5rem', 
+                              fontWeight: '700' 
+                            }}>
+                              {selectedAntagonista[attr] || 0}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}

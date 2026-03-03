@@ -155,7 +155,11 @@ def init_db():
             inteligencia INTEGER DEFAULT 0,
             pre INTEGER DEFAULT 0,
             vig INTEGER DEFAULT 0,
-            dt_rituais INTEGER DEFAULT 0
+            dt_rituais INTEGER DEFAULT 0,
+            banido INTEGER DEFAULT 0,
+            motivo_banimento TEXT,
+            data_banimento TEXT,
+            banido_por INTEGER
         )
     ''')
     cur.execute('''
@@ -268,6 +272,69 @@ def init_db():
             UNIQUE(criatura_id, elemento_id)
         )
     ''')
+    
+    # Tabela de equipes
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS equipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            nome TEXT NOT NULL,
+            descricao TEXT,
+            cor TEXT DEFAULT '#4a90d9',
+            icone TEXT DEFAULT '👥',
+            lider_id INTEGER,
+            criado_por INTEGER,
+            data_criacao TEXT,
+            FOREIGN KEY (lider_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (criado_por) REFERENCES users(id)
+        )
+    ''')
+    
+    # Tabela de associação N:N entre equipes e agentes
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS equipe_membros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            equipe_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            data_entrada TEXT,
+            FOREIGN KEY (equipe_id) REFERENCES equipes(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(equipe_id, user_id)
+        )
+    ''')
+    
+    # Tabela de itens de missão (inventário do modo jogo)
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS missao_itens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            missao_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            nome TEXT NOT NULL,
+            patente INTEGER DEFAULT 1,
+            espaco INTEGER DEFAULT 1,
+            tipo TEXT,
+            data_criacao TEXT,
+            FOREIGN KEY (missao_id) REFERENCES missoes(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Tabela de rolagens de dados (compartilhada entre jogadores da missão)
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS missao_rolagens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            missao_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            atributo TEXT NOT NULL,
+            quantidade INTEGER DEFAULT 1,
+            resultados TEXT NOT NULL,
+            melhor INTEGER NOT NULL,
+            cor TEXT,
+            tipo TEXT DEFAULT 'normal',
+            data_criacao TEXT,
+            FOREIGN KEY (missao_id) REFERENCES missoes(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ''')
     db.commit()
 
     # Ensure 'afinidade' column exists for older DBs that may lack it
@@ -367,6 +434,23 @@ def init_db():
     missoes_cols = [row[1] for row in cur.fetchall()]
     if 'comandante_id' not in missoes_cols:
         cur.execute("ALTER TABLE missoes ADD COLUMN comandante_id INTEGER")
+        db.commit()
+    
+    # Ensure banimento columns exist in users table for older DBs
+    if 'banido' not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN banido INTEGER DEFAULT 0")
+        db.commit()
+    if 'motivo_banimento' not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN motivo_banimento TEXT")
+        db.commit()
+    if 'data_banimento' not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN data_banimento TEXT")
+        db.commit()
+    if 'banido_por' not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN banido_por INTEGER")
+        db.commit()
+    if 'especializacao' not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN especializacao TEXT")
         db.commit()
     
     # Set display_name = username for any users where display_name is NULL
@@ -517,6 +601,10 @@ def login():
     
     if user is None:
         return jsonify({'erro': 'Credenciais inválidas'}), 401
+    
+    # Verificar se está banido
+    if user['banido'] == 1:
+        return jsonify({'erro': 'Acesso negado. Você foi banido do sistema.', 'banido': True, 'motivo': user['motivo_banimento']}), 403
     
     # Verificar senha se necessário
     if user['password'] and user['password'] != password:
@@ -912,9 +1000,15 @@ def register_user():
 def list_users():
     db = get_db()
     cur = db.cursor()
-    cur.execute('SELECT id, username, display_name, ativo, cargo, grupo FROM users')
+    cur.execute('SELECT id, username, display_name, ativo, cargo, grupo, foto FROM users WHERE (banido = 0 OR banido IS NULL)')
     rows = cur.fetchall()
-    users = [dict(r) for r in rows]
+    users = []
+    for row in rows:
+        user = dict(row)
+        # Converter foto para base64
+        if user.get('foto'):
+            user['foto'] = base64.b64encode(user['foto']).decode('utf-8')
+        users.append(user)
     return jsonify(users)
 
 @app.route('/users', methods=['POST'])
@@ -1998,6 +2092,257 @@ def notificar_agentes_missao(mid):
     }), 200
 
 
+# ===================== ROTAS DE ITENS DE MISSÃO =====================
+
+@app.route('/missoes/<int:mid>/itens', methods=['GET'])
+def get_missao_itens(mid):
+    """Retorna os itens do usuário logado nesta missão"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Buscar itens do usuário nesta missão
+    cur.execute('''
+        SELECT id, nome, patente, espaco, tipo, data_criacao
+        FROM missao_itens
+        WHERE missao_id = ? AND user_id = ?
+        ORDER BY data_criacao DESC
+    ''', (mid, user_id))
+    
+    itens = [dict(row) for row in cur.fetchall()]
+    return jsonify(itens), 200
+
+
+@app.route('/missoes/<int:mid>/itens', methods=['POST'])
+def criar_missao_item(mid):
+    """Cria um novo item para o usuário logado nesta missão"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    data = request.get_json() or {}
+    nome = data.get('nome', '').strip()
+    
+    if not nome:
+        return jsonify({'erro': 'Nome do item é obrigatório'}), 400
+    
+    patente = data.get('patente', 1)
+    espaco = data.get('espaco', 1)
+    tipo = data.get('tipo', '')
+    data_criacao = datetime.utcnow().isoformat()
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('''
+        INSERT INTO missao_itens (missao_id, user_id, nome, patente, espaco, tipo, data_criacao)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (mid, user_id, nome, patente, espaco, tipo, data_criacao))
+    db.commit()
+    
+    return jsonify({
+        'id': cur.lastrowid,
+        'nome': nome,
+        'patente': patente,
+        'espaco': espaco,
+        'tipo': tipo,
+        'data_criacao': data_criacao
+    }), 201
+
+
+@app.route('/missoes/<int:mid>/itens/<int:item_id>', methods=['DELETE'])
+def deletar_missao_item(mid, item_id):
+    """Remove um item do usuário logado"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Verificar se o item pertence ao usuário
+    cur.execute('SELECT * FROM missao_itens WHERE id = ? AND missao_id = ? AND user_id = ?', (item_id, mid, user_id))
+    item = cur.fetchone()
+    
+    if not item:
+        return jsonify({'erro': 'Item não encontrado'}), 404
+    
+    cur.execute('DELETE FROM missao_itens WHERE id = ?', (item_id,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Item removido'}), 200
+
+
+# ===================== ROTAS DE ROLAGENS DE DADOS =====================
+
+@app.route('/missoes/<int:mid>/rolagens', methods=['GET'])
+def get_missao_rolagens(mid):
+    """Retorna todas as rolagens da missão (de todos os jogadores)"""
+    db = get_db()
+    cur = db.cursor()
+    
+    # Buscar todas as rolagens da missão com dados do usuário
+    cur.execute('''
+        SELECT r.id, r.atributo, r.quantidade, r.resultados, r.melhor, r.cor, r.tipo, r.data_criacao,
+               u.id as user_id, u.display_name, u.foto
+        FROM missao_rolagens r
+        JOIN users u ON r.user_id = u.id
+        WHERE r.missao_id = ?
+        ORDER BY r.data_criacao DESC
+        LIMIT 100
+    ''', (mid,))
+    
+    rolagens = []
+    for row in cur.fetchall():
+        rolagem = dict(row)
+        # Converter foto para base64 se existir
+        if rolagem.get('foto'):
+            import base64
+            rolagem['foto'] = base64.b64encode(rolagem['foto']).decode('utf-8')
+        # Converter resultados de string JSON para lista
+        import json
+        try:
+            rolagem['resultados'] = json.loads(rolagem['resultados'])
+        except:
+            rolagem['resultados'] = []
+        rolagens.append(rolagem)
+    
+    return jsonify(rolagens), 200
+
+
+@app.route('/missoes/<int:mid>/rolagens', methods=['POST'])
+def criar_missao_rolagem(mid):
+    """Cria uma nova rolagem de dados para a missão"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    data = request.get_json() or {}
+    atributo = data.get('atributo', '')
+    quantidade = data.get('quantidade', 1)
+    resultados = data.get('resultados', [])
+    melhor = data.get('melhor', 0)
+    cor = data.get('cor', '#4a90d9')
+    tipo = data.get('tipo', 'normal')
+    data_criacao = datetime.utcnow().isoformat()
+    
+    import json
+    resultados_json = json.dumps(resultados)
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('''
+        INSERT INTO missao_rolagens (missao_id, user_id, atributo, quantidade, resultados, melhor, cor, tipo, data_criacao)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (mid, user_id, atributo, quantidade, resultados_json, melhor, cor, tipo, data_criacao))
+    db.commit()
+    
+    # Buscar dados do usuário para retornar
+    cur.execute('SELECT id, display_name, foto FROM users WHERE id = ?', (user_id,))
+    user = cur.fetchone()
+    
+    foto_base64 = None
+    if user and user['foto']:
+        import base64
+        foto_base64 = base64.b64encode(user['foto']).decode('utf-8')
+    
+    return jsonify({
+        'id': cur.lastrowid,
+        'atributo': atributo,
+        'quantidade': quantidade,
+        'resultados': resultados,
+        'melhor': melhor,
+        'cor': cor,
+        'tipo': tipo,
+        'data_criacao': data_criacao,
+        'user_id': user_id,
+        'display_name': user['display_name'] if user else 'Desconhecido',
+        'foto': foto_base64
+    }), 201
+
+
+@app.route('/missoes/<int:mid>/rolagens', methods=['DELETE'])
+def limpar_missao_rolagens(mid):
+    """Limpa todas as rolagens da missão (apenas comandante ou admin)"""
+    auth = request.headers.get('Authorization')
+    user_id = None
+    cargo = None
+    if auth:
+        parts = auth.split()
+        if len(parts) == 2 and parts[0].lower() == 'bearer':
+            try:
+                payload = jwt.decode(parts[1], SECRET_KEY, algorithms=['HS256'])
+                user_id = payload.get('user_id')
+                cargo = payload.get('cargo')
+            except:
+                pass
+    
+    if not user_id:
+        return jsonify({'erro': 'Não autenticado'}), 401
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Verificar se é comandante ou admin
+    cur.execute('SELECT comandante_id FROM missoes WHERE id = ?', (mid,))
+    missao = cur.fetchone()
+    
+    if not missao:
+        return jsonify({'erro': 'Missão não encontrada'}), 404
+    
+    if cargo not in ['administrador', 'Lider'] and user_id != missao['comandante_id']:
+        return jsonify({'erro': 'Sem permissão para limpar rolagens'}), 403
+    
+    cur.execute('DELETE FROM missao_rolagens WHERE missao_id = ?', (mid,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Rolagens limpas'}), 200
+
+
 # ===================== ROTAS DE NOTIFICAÇÕES =====================
 
 @app.route('/notificacoes', methods=['GET'])
@@ -2458,9 +2803,9 @@ def get_agentes():
                    vida_atual, vida_max, sanidade_atual, sanidade_max,
                    esforco_atual, esforco_max, defesa, bloqueio, esquiva,
                    protecao, resistencias, proficiencias,
-                   agi, forca, inteligencia, pre, vig, dt_rituais
+                   agi, forca, inteligencia, pre, vig, dt_rituais, especializacao
             FROM users
-            WHERE grupo = ? AND ativo = 1
+            WHERE grupo = ? AND (banido = 0 OR banido IS NULL)
             ORDER BY display_name
         ''', (grupo,))
     else:
@@ -2470,9 +2815,9 @@ def get_agentes():
                    vida_atual, vida_max, sanidade_atual, sanidade_max,
                    esforco_atual, esforco_max, defesa, bloqueio, esquiva,
                    protecao, resistencias, proficiencias,
-                   agi, forca, inteligencia, pre, vig, dt_rituais
+                   agi, forca, inteligencia, pre, vig, dt_rituais, especializacao
             FROM users
-            WHERE ativo = 1
+            WHERE (banido = 0 OR banido IS NULL)
             ORDER BY display_name
         ''')
     
@@ -2510,7 +2855,8 @@ def get_agentes():
             'inteligencia': row['inteligencia'],
             'pre': row['pre'],
             'vig': row['vig'],
-            'dt_rituais': row['dt_rituais']
+            'dt_rituais': row['dt_rituais'],
+            'especializacao': row['especializacao']
         }
         agentes.append(agente)
     
@@ -2529,7 +2875,7 @@ def get_agente(aid):
                vida_atual, vida_max, sanidade_atual, sanidade_max,
                esforco_atual, esforco_max, defesa, bloqueio, esquiva,
                protecao, resistencias, proficiencias,
-               agi, forca, inteligencia, pre, vig, dt_rituais
+               agi, forca, inteligencia, pre, vig, dt_rituais, especializacao
         FROM users
         WHERE id = ?
     ''', (aid,))
@@ -2569,7 +2915,8 @@ def get_agente(aid):
         'inteligencia': row['inteligencia'],
         'pre': row['pre'],
         'vig': row['vig'],
-        'dt_rituais': row['dt_rituais']
+        'dt_rituais': row['dt_rituais'],
+        'especializacao': row['especializacao']
     }
     
     return jsonify(agente)
@@ -2593,7 +2940,7 @@ def update_agente(aid):
         'vida_atual', 'vida_max', 'sanidade_atual', 'sanidade_max',
         'esforco_atual', 'esforco_max', 'defesa', 'bloqueio', 'esquiva',
         'protecao', 'resistencias', 'proficiencias',
-        'agi', 'forca', 'inteligencia', 'pre', 'vig', 'dt_rituais', 'grupo'
+        'agi', 'forca', 'inteligencia', 'pre', 'vig', 'dt_rituais', 'grupo', 'especializacao'
     ]
     
     updates = []
@@ -2624,6 +2971,358 @@ def update_agente(aid):
     db.commit()
     
     return jsonify({'mensagem': 'Agente atualizado com sucesso'}), 200
+
+
+# === ENDPOINTS DE ANTAGONISTAS (BANIMENTO) ===
+
+@app.route('/antagonistas', methods=['GET'])
+def listar_antagonistas():
+    """Lista todos os usuários banidos (antagonistas)"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        SELECT u.id, u.username, u.display_name, u.foto, u.grupo, u.cargo, u.classe, u.nex,
+               u.motivo_banimento, u.data_banimento, u.banido_por,
+               b.display_name as banido_por_nome
+        FROM users u
+        LEFT JOIN users b ON u.banido_por = b.id
+        WHERE u.banido = 1
+        ORDER BY u.data_banimento DESC
+    ''')
+    rows = cur.fetchall()
+    antagonistas = []
+    for row in rows:
+        antag = dict(row)
+        if antag.get('foto'):
+            antag['foto'] = base64.b64encode(antag['foto']).decode('utf-8')
+        antagonistas.append(antag)
+    return jsonify(antagonistas)
+
+
+@app.route('/usuarios/<int:uid>/banir', methods=['POST'])
+def banir_usuario(uid):
+    """Bane um usuário do sistema"""
+    auth_user = get_auth_user()
+    if not auth_user:
+        return jsonify({'erro': 'Não autorizado'}), 403
+    
+    # Verificar se o usuário autenticado tem permissão (admin ou lider)
+    if auth_user['cargo'] and auth_user['cargo'].lower() not in ('administrador', 'lider', '???'):
+        return jsonify({'erro': 'Sem permissão para banir usuários'}), 403
+    
+    data = request.get_json() or {}
+    motivo = data.get('motivo', 'Sem motivo especificado')
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Verificar se usuário existe
+    cur.execute('SELECT id, username, banido FROM users WHERE id = ?', (uid,))
+    user = cur.fetchone()
+    if not user:
+        return jsonify({'erro': 'Usuário não encontrado'}), 404
+    
+    # Não pode banir a si mesmo
+    if uid == auth_user['id']:
+        return jsonify({'erro': 'Você não pode banir a si mesmo'}), 400
+    
+    # Atualizar usuário como banido
+    cur.execute('''
+        UPDATE users 
+        SET banido = 1, 
+            motivo_banimento = ?, 
+            data_banimento = ?, 
+            banido_por = ?,
+            current_jti = NULL
+        WHERE id = ?
+    ''', (motivo, datetime.now().isoformat(), auth_user['id'], uid))
+    db.commit()
+    
+    return jsonify({'mensagem': f'Usuário banido com sucesso'}), 200
+
+
+@app.route('/usuarios/<int:uid>/desbanir', methods=['POST'])
+def desbanir_usuario(uid):
+    """Remove o banimento de um usuário"""
+    auth_user = get_auth_user()
+    if not auth_user:
+        return jsonify({'erro': 'Não autorizado'}), 403
+    
+    # Verificar se o usuário autenticado tem permissão (admin ou lider)
+    if auth_user['cargo'] and auth_user['cargo'].lower() not in ('administrador', 'lider', '???'):
+        return jsonify({'erro': 'Sem permissão para desbanir usuários'}), 403
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Verificar se usuário existe
+    cur.execute('SELECT id, banido FROM users WHERE id = ?', (uid,))
+    user = cur.fetchone()
+    if not user:
+        return jsonify({'erro': 'Usuário não encontrado'}), 404
+    
+    if not user['banido']:
+        return jsonify({'erro': 'Usuário não está banido'}), 400
+    
+    # Remover banimento
+    cur.execute('''
+        UPDATE users 
+        SET banido = 0, 
+            motivo_banimento = NULL, 
+            data_banimento = NULL, 
+            banido_por = NULL
+        WHERE id = ?
+    ''', (uid,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Banimento removido com sucesso'}), 200
+
+
+@app.route('/antagonistas/<int:aid>', methods=['GET'])
+def obter_antagonista(aid):
+    """Obtém detalhes de um antagonista específico"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        SELECT u.*, b.display_name as banido_por_nome
+        FROM users u
+        LEFT JOIN users b ON u.banido_por = b.id
+        WHERE u.id = ? AND u.banido = 1
+    ''', (aid,))
+    row = cur.fetchone()
+    if not row:
+        return jsonify({'erro': 'Antagonista não encontrado'}), 404
+    
+    resultado = dict(row)
+    if resultado.get('foto'):
+        resultado['foto'] = base64.b64encode(resultado['foto']).decode('utf-8')
+    
+    return jsonify(resultado)
+
+
+# === ENDPOINTS DE EQUIPES ===
+
+@app.route('/equipes', methods=['GET'])
+def listar_equipes():
+    """Lista todas as equipes"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''
+        SELECT e.*, u.display_name as lider_nome, 
+               (SELECT COUNT(*) FROM equipe_membros em WHERE em.equipe_id = e.id) as total_membros
+        FROM equipes e
+        LEFT JOIN users u ON e.lider_id = u.id
+        ORDER BY e.nome
+    ''')
+    rows = cur.fetchall()
+    equipes = [dict(row) for row in rows]
+    return jsonify(equipes)
+
+
+@app.route('/equipes/<int:eid>', methods=['GET'])
+def obter_equipe(eid):
+    """Obtém detalhes de uma equipe específica com seus membros"""
+    db = get_db()
+    cur = db.cursor()
+    
+    # Dados da equipe
+    cur.execute('''
+        SELECT e.*, u.display_name as lider_nome
+        FROM equipes e
+        LEFT JOIN users u ON e.lider_id = u.id
+        WHERE e.id = ?
+    ''', (eid,))
+    equipe = cur.fetchone()
+    if not equipe:
+        return jsonify({'erro': 'Equipe não encontrada'}), 404
+    
+    resultado = dict(equipe)
+    
+    # Membros da equipe
+    cur.execute('''
+        SELECT u.id, u.username, u.display_name, u.foto, u.grupo, u.cargo, u.classe, u.nex,
+               u.especializacao, em.data_entrada
+        FROM equipe_membros em
+        JOIN users u ON em.user_id = u.id
+        WHERE em.equipe_id = ?
+        ORDER BY u.display_name
+    ''', (eid,))
+    membros = []
+    for row in cur.fetchall():
+        membro = dict(row)
+        if membro.get('foto'):
+            membro['foto'] = base64.b64encode(membro['foto']).decode('utf-8')
+        membros.append(membro)
+    
+    resultado['membros'] = membros
+    return jsonify(resultado)
+
+
+@app.route('/equipes', methods=['POST'])
+def criar_equipe():
+    """Cria uma nova equipe"""
+    auth_user = get_auth_user()
+    if not auth_user:
+        return jsonify({'erro': 'Não autorizado'}), 403
+    
+    data = request.get_json() or {}
+    nome = data.get('nome', '').strip()
+    
+    if not nome:
+        return jsonify({'erro': 'Nome da equipe é obrigatório'}), 400
+    
+    descricao = data.get('descricao', '')
+    cor = data.get('cor', '#4a90d9')
+    icone = data.get('icone', '👥')
+    lider_id = data.get('lider_id')
+    membros_ids = data.get('membros', [])
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('''
+        INSERT INTO equipes (nome, descricao, cor, icone, lider_id, criado_por, data_criacao)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (nome, descricao, cor, icone, lider_id, auth_user['id'], datetime.now().isoformat()))
+    
+    equipe_id = cur.lastrowid
+    
+    # Adicionar membros
+    for user_id in membros_ids:
+        try:
+            cur.execute('''
+                INSERT INTO equipe_membros (equipe_id, user_id, data_entrada)
+                VALUES (?, ?, ?)
+            ''', (equipe_id, user_id, datetime.now().isoformat()))
+        except:
+            pass  # Ignora duplicatas
+    
+    db.commit()
+    return jsonify({'id': equipe_id, 'mensagem': 'Equipe criada com sucesso'}), 201
+
+
+@app.route('/equipes/<int:eid>', methods=['PUT'])
+def atualizar_equipe(eid):
+    """Atualiza uma equipe existente"""
+    auth_user = get_auth_user()
+    if not auth_user:
+        return jsonify({'erro': 'Não autorizado'}), 403
+    
+    data = request.get_json() or {}
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Verificar se equipe existe
+    cur.execute('SELECT id FROM equipes WHERE id = ?', (eid,))
+    if not cur.fetchone():
+        return jsonify({'erro': 'Equipe não encontrada'}), 404
+    
+    # Atualizar dados básicos
+    campos = []
+    valores = []
+    
+    if 'nome' in data:
+        campos.append('nome = ?')
+        valores.append(data['nome'])
+    if 'descricao' in data:
+        campos.append('descricao = ?')
+        valores.append(data['descricao'])
+    if 'cor' in data:
+        campos.append('cor = ?')
+        valores.append(data['cor'])
+    if 'icone' in data:
+        campos.append('icone = ?')
+        valores.append(data['icone'])
+    if 'lider_id' in data:
+        campos.append('lider_id = ?')
+        valores.append(data['lider_id'])
+    
+    if campos:
+        valores.append(eid)
+        cur.execute(f'UPDATE equipes SET {", ".join(campos)} WHERE id = ?', valores)
+    
+    # Atualizar membros se fornecido
+    if 'membros' in data:
+        # Remover membros atuais
+        cur.execute('DELETE FROM equipe_membros WHERE equipe_id = ?', (eid,))
+        # Adicionar novos membros
+        for user_id in data['membros']:
+            try:
+                cur.execute('''
+                    INSERT INTO equipe_membros (equipe_id, user_id, data_entrada)
+                    VALUES (?, ?, ?)
+                ''', (eid, user_id, datetime.now().isoformat()))
+            except:
+                pass
+    
+    db.commit()
+    return jsonify({'mensagem': 'Equipe atualizada com sucesso'})
+
+
+@app.route('/equipes/<int:eid>', methods=['DELETE'])
+def deletar_equipe(eid):
+    """Deleta uma equipe"""
+    auth_user = get_auth_user()
+    if not auth_user:
+        return jsonify({'erro': 'Não autorizado'}), 403
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    # Verificar se equipe existe
+    cur.execute('SELECT id FROM equipes WHERE id = ?', (eid,))
+    if not cur.fetchone():
+        return jsonify({'erro': 'Equipe não encontrada'}), 404
+    
+    # Deletar (membros serão deletados em cascata)
+    cur.execute('DELETE FROM equipes WHERE id = ?', (eid,))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Equipe deletada com sucesso'})
+
+
+@app.route('/equipes/<int:eid>/membros', methods=['POST'])
+def adicionar_membro_equipe(eid):
+    """Adiciona um membro à equipe"""
+    auth_user = get_auth_user()
+    if not auth_user:
+        return jsonify({'erro': 'Não autorizado'}), 403
+    
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    
+    if not user_id:
+        return jsonify({'erro': 'user_id é obrigatório'}), 400
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    try:
+        cur.execute('''
+            INSERT INTO equipe_membros (equipe_id, user_id, data_entrada)
+            VALUES (?, ?, ?)
+        ''', (eid, user_id, datetime.now().isoformat()))
+        db.commit()
+        return jsonify({'mensagem': 'Membro adicionado com sucesso'})
+    except:
+        return jsonify({'erro': 'Membro já está na equipe'}), 400
+
+
+@app.route('/equipes/<int:eid>/membros/<int:uid>', methods=['DELETE'])
+def remover_membro_equipe(eid, uid):
+    """Remove um membro da equipe"""
+    auth_user = get_auth_user()
+    if not auth_user:
+        return jsonify({'erro': 'Não autorizado'}), 403
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute('DELETE FROM equipe_membros WHERE equipe_id = ? AND user_id = ?', (eid, uid))
+    db.commit()
+    
+    return jsonify({'mensagem': 'Membro removido com sucesso'})
 
 
 if __name__ == '__main__':
